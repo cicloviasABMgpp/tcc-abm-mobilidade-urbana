@@ -1,0 +1,3864 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.4" snapToGrid="true">
+  <code><![CDATA[;; =====================================================================
+;; MODELO BASEADO EM AGENTES — ESCOLHA DE CADEIA MODAL E INTERMODALIDADE
+;;
+;; Calibrado contra a Pesquisa Origem-Destino 2023 do Metrô de São Paulo,
+;; sub-regiões não-capital da RMSP (cenário sem intervenção).
+;; Cenários: ciclovia (on/off) × bike-sharing (on/off).
+;;
+;; Controles de análise (os padrões correspondem à versão calibrada):
+;;   ciclovia-fator-inseguranca / -esforco / -tempo  (0,60 / 0,75 / 0,70)
+;;   sin-congelado?   fixa a insegurança percebida no nível de equilíbrio
+;;                    da linha de base, desligando a retroalimentação do
+;;                    safety-in-numbers
+;;   moto-recebe-sin? liga a transferência do safety-in-numbers para a
+;;                    motocicleta (premissa examinada no experimento E6)
+;;
+;; Cores dos veículos iguais às do gráfico de divisão modal: automóvel
+;; magenta, ônibus azul, motocicleta laranja, bicicleta verde, trem cinza.
+;; =====================================================================
+globals [
+  mu-logit-val
+  ruido-escolha-val
+  headway-trem-min-val
+  headway-pico-min-val
+  headway-fora-min-val
+  n-trens-val
+  risco-moto-val
+  decaimento-safety-val
+  n-agentes-total
+  t-fixo-carro   t-fixo-onibus   t-fixo-moto   t-fixo-bike
+  t-dist-carro   t-dist-onibus   t-dist-moto   t-dist-bike
+  t-cong-carro   t-cong-onibus   t-cong-moto
+  fator-esforco-val
+  fator-cic-inseguranca   fator-cic-esforco   fator-cic-tempo
+  bicicletario-ocupadas-hoje
+  uso-trem-hoje
+  stockouts-bairro-hoje
+  bloqueios-devolucao-hoje
+  bikes-em-transito
+  uso-carro-direto-hoje   uso-carro-trem-hoje
+  uso-onibus-direto-hoje  uso-onibus-trem-hoje
+  uso-moto-direto-hoje    uso-moto-trem-hoje
+  uso-bike-direto-hoje    uso-bike-trem-hoje
+  uso-bike-hoje    uso-carro-hoje    uso-onibus-hoje   uso-moto-hoje
+  uso-bike-compartilhada-hoje
+  uso-bike-ida-hoje
+  uso-bike-media   uso-moto-media   uso-onibus-media
+  transito-ontem
+  dia-atual
+  velocidade-media-ontem
+  velocidade-livre-media
+  velocidade-media-carros-hoje   velocidade-media-motos-hoje
+  velocidade-media-onibus-hoje
+  velocidade-media-bikes-hoje
+  densidade-avenida-hoje
+  densidade-avenida-pico
+  densidade-ciclovia-hoje
+  densidade-ciclovia-ontem
+  tempos-por-cadeia
+  estado-semaforo
+  ticks-semaforo
+  clima-hoje
+  ticks-por-hora
+  hora-inicio-dia
+  tick-inicio-do-dia
+  tick-ultimo-despacho-rosa
+  tick-ultimo-despacho-verde
+  pct-auto-final
+  pct-trem-final
+  pct-onibus-final
+  pct-moto-final
+  pct-bike-final
+  densidade-ciclovia-final
+  hist-pct-auto  hist-pct-trem  hist-pct-onibus  hist-pct-moto  hist-pct-bike
+  hist-bike-media
+  ;; séries diárias de velocidade e ocupação
+  hist-vel-carro  hist-vel-moto  hist-vel-onibus  hist-vel-bike
+  hist-transito   hist-dens-avenida
+  ;; séries diárias de ocupação de capacidade
+  hist-dens-ciclovia   hist-pico-bicicletario  hist-carro-trem
+  hist-moto-trem       hist-stockouts          hist-bloqueios
+  hist-pico-bikes-uso
+  pico-bicicletario-hoje   pico-bikes-uso-hoje
+  ;; séries diárias por cadeia modal
+  hist-cad-carro-d   hist-cad-carro-t
+  hist-cad-onibus-d  hist-cad-onibus-t
+  hist-cad-moto-d    hist-cad-moto-t
+  hist-cad-bike-d    hist-cad-bike-t
+  ;; séries diárias por perfil e de uso da bicicleta compartilhada
+  hist-perfil-trab  hist-perfil-estu  hist-perfil-outr  hist-perfil-cativ
+  hist-bike-compartilhada
+  uso-bike-referencia        ;; população ciclística de equilíbrio da linha de base
+]
+breed [ trabalhadores trabalhador ]
+breed [ estudantes    estudante   ]
+breed [ outros        pessoa-outra ]
+breed [ estacoes-bike estacao-bike ]
+breed [ trens         trem        ]
+breed [ onibus        onibus-um   ]
+turtles-own [
+  tolerancia-esforco
+  distancia-viagem
+  dispersao-perfil
+  cadeia-escolhida  modo-acesso  usa-trem?  embarcou?
+  possui-bike?  cor-original
+  possui-carro?  possui-moto?
+  fase-movimento  virou-veiculo?
+  velocidade-atual  velocidade-maxima
+  tick-inicio-viagem  velocidades-amostradas
+  casa-x  casa-y
+  direcao-viagem
+  via-de-ida-pycor
+  cadeia-ida
+  usou-bike-compartilhada-ida?
+  faixa-atual
+  dentro-de-trem
+  linha-do-agente
+  parada-origem-x  parada-origem-y
+  hora-saida-ida   hora-saida-volta
+  tick-saida-ida   tick-saida-volta
+  ja-saiu-ida?     ja-saiu-volta?
+  beta-tempo  beta-custo  beta-seguranca  beta-conforto  beta-confiab
+  memoria-stock-out
+  teve-stockout-hoje?
+  sem-bike-disponivel?   ;; encontrou as estações de bairro vazias hoje
+]
+estacoes-bike-own [ bikes-locais  capacidade-vagas  tipo-estacao ]
+trens-own [
+  passageiros
+  estado-trem
+  ticks-parado-trem
+  direcao-passageiros
+  ordem-trem
+  tick-de-saida-trem
+]
+onibus-own [
+  linha-onibus
+  passageiros-onibus
+  estado-onibus
+  ticks-parado-onibus
+  ordem-na-linha
+  velocidades-onibus
+]
+;; =====================================================================
+;; INICIALIZAÇÃO
+;; =====================================================================
+to setup
+  clear-all
+  if usar-semente? [ random-seed semente ]
+  if sortear-parametros? [ sortear-cenario ]
+  set mu-logit-val          12
+  set ruido-escolha-val      5
+  set headway-trem-min-val  13
+  set headway-pico-min-val   8
+  set headway-fora-min-val  20
+  set n-trens-val            3
+  set risco-moto-val         0.9
+  set decaimento-safety-val  0.02
+  set uso-bike-referencia    16.08   ;; média móvel de uso da bicicleta na linha de base
+  set n-agentes-total        260
+  ;; Estrutura de tempo: componente fixo, componente proporcional à
+  ;; distância do trajeto e componente proporcional ao congestionamento.
+  ;; A bicicleta é imune ao congestionamento viário.
+  set t-fixo-carro    5    set t-dist-carro   0.21   set t-cong-carro  0.4
+  set t-fixo-onibus  23    set t-dist-onibus  0.98   set t-cong-onibus 0.3
+  set t-fixo-moto     7    set t-dist-moto    0.13   set t-cong-moto   0.1
+  set t-fixo-bike    22    set t-dist-bike    2.14
+  set fator-esforco-val    2.15
+  set fator-cic-inseguranca ciclovia-fator-inseguranca  ;; padrão 0,60
+  set fator-cic-esforco     ciclovia-fator-esforco      ;; padrão 0,75
+  set fator-cic-tempo       ciclovia-fator-tempo        ;; padrão 0,70
+  set ticks-por-hora 180
+  set hora-inicio-dia 6
+  set tick-inicio-do-dia 0
+  set tick-ultimo-despacho-rosa  -99999
+  set tick-ultimo-despacho-verde -99999
+  set uso-bike-media    5
+  set uso-moto-media   21
+  set uso-onibus-media 52
+  set velocidade-livre-media   0.4
+  set velocidade-media-ontem   velocidade-livre-media
+  set transito-ontem           50
+  set densidade-ciclovia-ontem 0
+  set estado-semaforo  "verde-carros"
+  set ticks-semaforo   0
+  set dia-atual        1
+  set pct-auto-final           0
+  set pct-trem-final           0
+  set pct-onibus-final         0
+  set pct-moto-final           0
+  set pct-bike-final           0
+  set densidade-ciclovia-final 0
+  set hist-pct-auto   []
+  set hist-pct-trem   []
+  set hist-pct-onibus []
+  set hist-pct-moto   []
+  set hist-pct-bike   []
+  set hist-bike-media []
+  set hist-vel-carro    []
+  set hist-vel-moto     []
+  set hist-vel-onibus   []
+  set hist-vel-bike     []
+  set hist-transito     []
+  set hist-dens-avenida []
+  set hist-dens-ciclovia     []
+  set hist-pico-bicicletario []
+  set hist-carro-trem        []
+  set hist-moto-trem         []
+  set hist-stockouts         []
+  set hist-bloqueios         []
+  set hist-pico-bikes-uso    []
+  set hist-cad-carro-d  []
+  set hist-cad-carro-t  []
+  set hist-cad-onibus-d []
+  set hist-cad-onibus-t []
+  set hist-cad-moto-d   []
+  set hist-cad-moto-t   []
+  set hist-cad-bike-d   []
+  set hist-cad-bike-t   []
+  set hist-perfil-trab  []
+  set hist-perfil-estu  []
+  set hist-perfil-outr  []
+  set hist-perfil-cativ []
+  set hist-bike-compartilhada []
+  sortear-clima
+  resetar-contadores-do-dia
+  desenhar-cidade
+  criar-estacoes-bike
+  distribuir-frota-inicial
+  criar-trens
+  povoar-cidade
+  reset-ticks
+end
+;; sorteio de contexto para a análise de espaço de parâmetros.
+;; Chamado após random-seed, de modo que cada semente gera sempre o mesmo
+;; contexto e os quatro cenários de uma mesma semente compartilham as
+;; mesmas condições ambientais e de capacidade. Com o switch desligado,
+;; os valores permanecem os definidos na interface.
+to sortear-cenario
+  set prob-chuva                 10 + random 51
+  set nivel-violencia-base       20 + random 51
+  set limite-saturacao-ciclovia  precision (0.05 + random-float 0.20) 3
+  set bikes-disponiveis-sharing  20 + random 81
+  set vagas-bicicletario         10 + random 51
+  set vagas-carro-estacao        5 + random 26
+  set vagas-moto-estacao         5 + random 26
+end
+to resetar-contadores-do-dia
+  set uso-bike-hoje 0   set uso-carro-hoje 0
+  set uso-onibus-hoje 0  set uso-moto-hoje 0
+  set uso-bike-compartilhada-hoje 0
+  set uso-trem-hoje 0
+  set uso-bike-ida-hoje 0
+  set stockouts-bairro-hoje 0   set bloqueios-devolucao-hoje 0
+  set bicicletario-ocupadas-hoje 0  set bikes-em-transito 0
+  set uso-carro-direto-hoje 0   set uso-carro-trem-hoje 0
+  set uso-onibus-direto-hoje 0  set uso-onibus-trem-hoje 0
+  set uso-moto-direto-hoje 0    set uso-moto-trem-hoje 0
+  set uso-bike-direto-hoje 0    set uso-bike-trem-hoje 0
+  set velocidade-media-carros-hoje 0   set velocidade-media-motos-hoje  0
+  set velocidade-media-onibus-hoje 0
+  set velocidade-media-bikes-hoje  0
+  set densidade-avenida-hoje 0
+  set densidade-avenida-pico 0
+  set densidade-ciclovia-hoje 0
+  set pico-bicicletario-hoje 0
+  set pico-bikes-uso-hoje    0
+  set tempos-por-cadeia (list [] [] [] [] [] [] [] [])
+end
+;; =====================================================================
+;; CLIMA
+;; =====================================================================
+to sortear-clima
+  ifelse random-float 100 < prob-chuva
+    [ set clima-hoje "chuva" ]
+    [ set clima-hoje "sol"   ]
+end
+;; =====================================================================
+;; RELÓGIO SIMULADO (1 tick = 20 s)
+;; =====================================================================
+to-report tick-do-dia
+  report ticks - tick-inicio-do-dia
+end
+to-report hora-atual-do-dia
+  report hora-inicio-dia + (tick-do-dia / ticks-por-hora)
+end
+to-report hora-formatada
+  let h hora-atual-do-dia mod 24
+  let hh floor h
+  let mm floor ((h - hh) * 60)
+  report (word (ifelse-value (hh < 10) [ word "0" hh ] [ hh ])
+               ":"
+               (ifelse-value (mm < 10) [ word "0" mm ] [ mm ]))
+end
+to-report periodo-do-dia
+  let h hora-atual-do-dia mod 24
+  if h >= 7  and h < 9  [ report "pico-manha" ]
+  if h >= 10 and h < 12 [ report "low-manha"  ]
+  if h >= 15 and h < 17 [ report "pico-tarde" ]
+  if h >= 18 and h < 20 [ report "low-tarde"  ]
+  report "fora-operacao"
+end
+to-report sortear-hora-saida-ida
+  ifelse random-float 1 < 0.7
+    [ report 7  + random-float 2 ]
+    [ report 10 + random-float 2 ]
+end
+to-report dia-concluido?
+  report all? (turtles with [
+    breed != estacoes-bike and breed != trens and breed != onibus
+  ]) [ fase-movimento = "em-casa-volta" ]
+end
+to-report n-fora-de-casa
+  report count turtles with [
+    breed != estacoes-bike and breed != trens and breed != onibus
+    and fase-movimento != "em-casa-volta"
+    and fase-movimento != "em-casa-ida"
+  ]
+end
+;; =====================================================================
+;; LAYOUT ESPACIAL
+;; =====================================================================
+to-report e-via-horizontal-patch? [ y ]
+  report (abs (y - 28) <= 2) or (abs (y - 13) <= 2)
+end
+to-report e-centro-via-horizontal? [ y ]
+  report (y = 28) or (y = 13)
+end
+to-report e-ciclovia-horizontal? [ y ]
+  report (y = 26) or (y = 30) or (y = 11) or (y = 15)
+end
+to desenhar-cidade
+  ask patches [
+    set pcolor 55
+    if pycor <= -25 [ set pcolor blue ]
+    if e-via-horizontal-patch? pycor and pycor > -25 [ set pcolor 7 ]
+    if pxcor >= -3 and pxcor <= 3 [
+      ifelse pxcor = 0 [ set pcolor 4 ] [ set pcolor 2 ]
+    ]
+    if e-centro-via-horizontal? pycor and (pxcor >= -3 and pxcor <= 3) [
+      if pxcor mod 2 = 0 [ set pcolor 9.9 ]
+    ]
+    if ciclovia [
+      if (pxcor = -3 or pxcor = 3) [ set pcolor 15 ]
+      if e-ciclovia-horizontal? pycor [ set pcolor 15 ]
+    ]
+    if pxcor >= -10 and pxcor <= -4 and pycor >= 0   and pycor <= 2   [ set pcolor 35 ]
+    if pxcor >= -10 and pxcor <= -4 and pycor >= -27 and pycor <= -25 [ set pcolor 35 ]
+    if pxcor >= 4   and pxcor <= 10 and pycor >= -27 and pycor <= -25 [ set pcolor 4  ]
+    if pxcor = -5 and pycor <= -1 and pycor >= -24 [ set pcolor 5 ]
+    if pxcor = -4 and pycor <= -1 and pycor >= -24 [ set pcolor 5 ]
+    if bike-sharing [
+      if (pxcor = -22 and pycor = 25) [ set pcolor 45 ]
+      if (pxcor = 22  and pycor = 25) [ set pcolor 45 ]
+      if (pxcor = -22 and pycor = 10) [ set pcolor 45 ]
+      if (pxcor = 22  and pycor = 10) [ set pcolor 45 ]
+      if (pxcor = -4  and pycor = 3)  [ set pcolor 45 ]
+    ]
+  ]
+end
+to criar-estacoes-bike
+  if not bike-sharing [ stop ]
+  ask patches with [ pcolor = 45 ] [
+    sprout-estacoes-bike 1 [
+      set shape "house"  set color yellow  set size 1.2
+      set bikes-locais 0
+      ifelse pxcor = -4 and pycor = 3
+        [ set tipo-estacao "terminal"  set capacidade-vagas bikes-disponiveis-sharing ]
+        [ set tipo-estacao "bairro"    set capacidade-vagas bikes-disponiveis-sharing ]
+    ]
+  ]
+end
+to distribuir-frota-inicial
+  if not bike-sharing [ stop ]
+  let estacoes-bairro estacoes-bike with [ tipo-estacao = "bairro" ]
+  let n count estacoes-bairro
+  if n = 0 [ stop ]
+  let bikes-por-estacao floor (bikes-disponiveis-sharing / n)
+  let resto bikes-disponiveis-sharing - (bikes-por-estacao * n)
+  ask estacoes-bairro [ set bikes-locais min (list bikes-por-estacao capacidade-vagas) ]
+  while [ resto > 0 and any? estacoes-bairro with [ bikes-locais < capacidade-vagas ] ] [
+    ask one-of estacoes-bairro with [ bikes-locais < capacidade-vagas ] [
+      set bikes-locais bikes-locais + 1
+    ]
+    set resto resto - 1
+  ]
+end
+to criar-trens
+  let i 0
+  while [ i < n-trens-val ] [
+    create-trens 1 [
+      set shape "train"  set color gray  set size 2
+      setxy -5 -1  set heading 180
+      set passageiros []
+      set estado-trem "aguardando-horario"
+      set ticks-parado-trem 0
+      set direcao-passageiros ""
+      set ordem-trem i
+      set tick-de-saida-trem (i * (headway-trem-min-val * ticks-por-hora / 60))
+      hide-turtle
+    ]
+    set i i + 1
+  ]
+end
+;; =====================================================================
+;; SISTEMA DE ÔNIBUS
+;; =====================================================================
+to-report headway-atual-ticks
+  let hw-min headway-fora-min-val
+  if member? "pico" periodo-do-dia [ set hw-min headway-pico-min-val ]
+  report hw-min * ticks-por-hora / 60
+end
+to-report linha-tem-onibus-subindo? [ nlinha ]
+  report any? onibus with [
+    linha-onibus = nlinha
+    and member? estado-onibus ["parado-terminal" "subindo-avenida" "subindo-avenida-pos-estacao"]
+  ]
+end
+to despachar-onibus
+  let hw headway-atual-ticks
+  if (tick-do-dia - tick-ultimo-despacho-rosa) >= hw
+     and not linha-tem-onibus-subindo? 1 [
+    criar-um-onibus 1 105   ;; azul, como no gráfico
+    set tick-ultimo-despacho-rosa tick-do-dia
+  ]
+  if (tick-do-dia - tick-ultimo-despacho-verde) >= hw
+     and not linha-tem-onibus-subindo? 2 [
+    criar-um-onibus 2 105
+    set tick-ultimo-despacho-verde tick-do-dia
+  ]
+end
+to criar-um-onibus [ nlinha cor-linha ]
+  create-onibus 1 [
+    set linha-onibus nlinha
+    set ordem-na-linha 0
+    set shape "bus"  set color cor-linha  set size 1.8
+    setxy 4 -26  set heading 270
+    set passageiros-onibus []
+    set estado-onibus "parado-terminal"
+    set ticks-parado-onibus 0
+    set velocidades-onibus []
+  ]
+end
+to-report y-via-linha
+  ifelse linha-onibus = 1 [ report 28 ] [ report 13 ]
+end
+to-report y-via-oeste
+  report y-via-linha + 1
+end
+to-report y-via-leste
+  report y-via-linha - 1
+end
+to-report onibus-bloqueado?
+  let eu self
+  let bloqueio? false
+  let i 1
+  while [ i <= 2 and not bloqueio? ] [
+    let p patch-ahead i
+    if p != nobody [
+      if any? (turtles-on p) with [ breed = onibus and self != eu and not hidden? ]
+        [ set bloqueio? true ]
+      if any? (turtles-on p) with [
+        self != eu and not hidden?
+        and (modo-acesso = "carro" or modo-acesso = "moto")
+      ] [ set bloqueio? true ]
+    ]
+    set i i + 1
+  ]
+  report bloqueio?
+end
+to avancar-onibus
+  ifelse onibus-bloqueado?
+    [ set velocidades-onibus lput 0 velocidades-onibus ]
+    [ forward 0.3  set velocidades-onibus lput 0.3 velocidades-onibus ]
+end
+to mover-onibus
+  let capacidade           20
+  let tempo-max-parada     15
+  let tempo-parada-estacao  8
+  if estado-onibus = "parado-terminal" [
+    desembarcar-onibus "terminal"
+    embarcar-onibus-na-parada capacidade
+    set ticks-parado-onibus ticks-parado-onibus + 1
+    if (length passageiros-onibus >= capacidade) or (ticks-parado-onibus >= tempo-max-parada) [
+      setxy 2 -26
+      set estado-onibus "subindo-avenida"
+      set ticks-parado-onibus 0
+      set heading 0
+    ]
+    stop
+  ]
+  if estado-onibus = "subindo-avenida" [
+    set xcor 2  set heading 0
+    avancar-onibus
+    if pycor >= 1 and pycor <= 2 [
+      setxy 2 1
+      set estado-onibus "parado-estacao"
+      stop
+    ]
+    if pycor >= y-via-linha [
+      setxy 2 y-via-linha
+      set estado-onibus "indo-leste"
+      set heading 90
+      setxy 2 y-via-leste
+    ]
+    stop
+  ]
+  if estado-onibus = "parado-estacao" [
+    desembarcar-onibus "estacao"
+    set ticks-parado-onibus ticks-parado-onibus + 1
+    if ticks-parado-onibus >= tempo-parada-estacao [
+      set estado-onibus "subindo-avenida-pos-estacao"
+      set ticks-parado-onibus 0
+      set heading 0
+    ]
+    stop
+  ]
+  if estado-onibus = "subindo-avenida-pos-estacao" [
+    set xcor 2  set heading 0
+    avancar-onibus
+    if pycor >= y-via-linha [
+      setxy 2 y-via-linha
+      set estado-onibus "indo-leste"
+      set heading 90
+      setxy 2 y-via-leste
+    ]
+    stop
+  ]
+  if estado-onibus = "indo-leste" [
+    set ycor y-via-leste  set heading 90
+    avancar-onibus
+    if pxcor >= 22 [ setxy 22 y-via-leste  set estado-onibus "parado-leste" ]
+    stop
+  ]
+  if estado-onibus = "parado-leste" [
+    desembarcar-onibus "leste"
+    embarcar-onibus-na-parada capacidade
+    set ticks-parado-onibus ticks-parado-onibus + 1
+    if (length passageiros-onibus >= capacidade) or (ticks-parado-onibus >= tempo-max-parada) [
+      setxy 22 y-via-oeste
+      set heading 270
+      set estado-onibus "indo-oeste"
+      set ticks-parado-onibus 0
+    ]
+    stop
+  ]
+  if estado-onibus = "indo-oeste" [
+    set ycor y-via-oeste  set heading 270
+    avancar-onibus
+    if pxcor <= -22 [ setxy -22 y-via-oeste  set estado-onibus "parado-oeste" ]
+    stop
+  ]
+  if estado-onibus = "parado-oeste" [
+    desembarcar-onibus "oeste"
+    embarcar-onibus-na-parada capacidade
+    set ticks-parado-onibus ticks-parado-onibus + 1
+    if (length passageiros-onibus >= capacidade) or (ticks-parado-onibus >= tempo-max-parada) [
+      setxy -22 y-via-leste
+      set heading 90
+      set estado-onibus "retornando-leste"
+      set ticks-parado-onibus 0
+    ]
+    stop
+  ]
+  if estado-onibus = "retornando-leste" [
+    set ycor y-via-leste  set heading 90
+    avancar-onibus
+    if pxcor >= -2 [
+      setxy -2 y-via-leste
+      set estado-onibus "descendo-avenida"
+      set heading 180
+    ]
+    stop
+  ]
+  if estado-onibus = "descendo-avenida" [
+    set xcor -2  set heading 180
+    avancar-onibus
+    if pycor <= -26 [
+      setxy -2 -26
+      set estado-onibus "voltando-pra-terminal"
+    ]
+    stop
+  ]
+  if estado-onibus = "voltando-pra-terminal" [
+    ;; A velocidade média do circuito alimenta o índice de congestionamento.
+    if not empty? velocidades-onibus [
+      set velocidade-media-onibus-hoje
+        media-movel velocidade-media-onibus-hoje
+                    ((sum velocidades-onibus) / (length velocidades-onibus))
+    ]
+    foreach passageiros-onibus [ p ->
+      ask p [
+        show-turtle
+        set direcao-viagem "volta"
+        set fase-movimento "caminhando-pra-casa"
+        set shape "person"  set color cor-original  set virou-veiculo? false
+      ]
+    ]
+    set passageiros-onibus []
+    die
+  ]
+end
+to embarcar-onibus-na-parada [ capacidade ]
+  let vagas capacidade - length passageiros-onibus
+  if vagas <= 0 [ stop ]
+  let minha-linha linha-onibus
+  let x-onibus pxcor
+  let y-onibus pycor
+  let candidatos turtles with [
+    breed != estacoes-bike and breed != trens and breed != onibus
+    and (fase-movimento = "esperando-onibus-ida" or fase-movimento = "esperando-onibus-volta")
+    and linha-do-agente = minha-linha
+    and not hidden?
+    and distancexy x-onibus y-onibus < 3
+  ]
+  if not any? candidatos [ stop ]
+  let para-embarcar n-of (min (list vagas count candidatos)) candidatos
+  ask para-embarcar [
+    set embarcou? true
+    hide-turtle
+  ]
+  set passageiros-onibus (sentence passageiros-onibus [self] of para-embarcar)
+end
+to desembarcar-onibus [ nome-parada ]
+  if empty? passageiros-onibus [ stop ]
+  let restantes []
+  foreach passageiros-onibus [ p ->
+    let descer? false
+    ask p [
+      ifelse direcao-viagem = "ida" [
+        if nome-parada = "terminal" and not usa-trem? [ set descer? true ]
+        if nome-parada = "estacao"  and usa-trem?     [ set descer? true ]
+      ] [
+        if nome-parada = "oeste" and parada-origem-x < 0 [ set descer? true ]
+        if nome-parada = "leste" and parada-origem-x > 0 [ set descer? true ]
+      ]
+    ]
+    ifelse descer? [
+      ask p [
+        show-turtle
+        set embarcou? false
+        ifelse direcao-viagem = "ida" [
+          ifelse usa-trem? [
+            setxy -7 1
+            set fase-movimento "esperando-trem"
+            set shape "person"  set color cor-original  set virou-veiculo? false
+          ] [
+            let pos posicao-aleatoria-no-destino
+            setxy item 0 pos item 1 pos
+            set fase-movimento "no-destino"
+            set shape "person"  set color cor-original  set virou-veiculo? false
+            registrar-fim-de-viagem
+          ]
+        ] [
+          setxy [pxcor] of myself [pycor] of myself
+          set direcao-viagem "volta"
+          set fase-movimento "caminhando-pra-casa"
+          set shape "person"  set color cor-original  set virou-veiculo? false
+        ]
+      ]
+    ] [
+      set restantes lput p restantes
+    ]
+  ]
+  set passageiros-onibus restantes
+end
+;; =====================================================================
+;; POPULAÇÃO
+;; Proporções por motivo de viagem: OD 2023
+;; Trabalho 46,2% / Educação 36,2% / Outros 17,6% — N=260
+;;
+;; Parâmetros: tolerância | dispersão | prob-bike | cor |
+;;             β-tempo β-custo β-seg β-conf β-confi | prob-carro prob-moto | horas-fora
+;; =====================================================================
+to povoar-cidade
+  create-trabalhadores 120 [ inicializar-perfil  40  0.25  20  cyan    1.4  0.6  0.8  0.7  1.2   90  30   8 ]
+  create-estudantes     94 [ inicializar-perfil  60  0.25  40  orange  0.7  1.5  0.6  0.5  0.7   30   8   4 ]
+  create-outros         46 [ inicializar-perfil  30  0.50   3  violet  0.9  0.9  1.1  1.1  1.0   70  15   3 ]
+end
+to inicializar-perfil [ esforco dispersao prob-bike cor-base
+                        m-tempo m-custo m-seg m-conf m-confi
+                        prob-carro prob-moto horas-fora ]
+  set shape "person"  set size 1.5  set color cor-base  set cor-original cor-base
+  set dispersao-perfil dispersao
+  set tolerancia-esforco esforco
+  set memoria-stock-out  0
+  set teve-stockout-hoje? false
+  set sem-bike-disponivel? false
+  set cadeia-escolhida ""  set modo-acesso ""  set usa-trem? false  set embarcou? false
+  set velocidade-atual 0   set velocidade-maxima 0.2
+  set tick-inicio-viagem 0  set velocidades-amostradas []
+  set possui-bike?  (random 100 < prob-bike)
+  set possui-carro? (random 100 < prob-carro)
+  set possui-moto?  (random 100 < prob-moto)
+  move-to one-of patches with [ pcolor = 55 and pycor > 15 ]
+  set casa-x xcor  set casa-y ycor
+  set virou-veiculo? false
+  set via-de-ida-pycor 0
+  set cadeia-ida ""
+  set usou-bike-compartilhada-ida? false
+  set faixa-atual "externa"
+  set dentro-de-trem nobody
+  set linha-do-agente 0
+  set parada-origem-x 0  set parada-origem-y 0
+  set beta-tempo     sorteia-peso m-tempo
+  set beta-custo     sorteia-peso m-custo
+  set beta-seguranca sorteia-peso m-seg
+  set beta-conforto  sorteia-peso m-conf
+  set beta-confiab   sorteia-peso m-confi
+  set hora-saida-ida   sortear-hora-saida-ida
+  set hora-saida-volta hora-saida-ida + horas-fora
+  set tick-saida-ida   round ((hora-saida-ida   - hora-inicio-dia) * ticks-por-hora)
+  set tick-saida-volta round ((hora-saida-volta - hora-inicio-dia) * ticks-por-hora)
+  set ja-saiu-ida? false  set ja-saiu-volta? false
+  set fase-movimento "em-casa-ida"
+  set direcao-viagem "ida"
+  set distancia-viagem calcular-distancia-viagem
+end
+;; Trajeto percorrido entre residência e destino, em patches ao longo do
+;; percurso efetivo do modelo. Varia entre 44 e 85 unidades.
+to-report calcular-distancia-viagem
+  let y-via ifelse-value (casa-y > 20) [28] [13]
+  report (abs (casa-y - y-via)) + (abs (casa-x + 2)) + (abs (y-via + 26))
+end
+to-report sorteia-peso [ media ]
+  report max (list 0 (random-normal media (media * dispersao-perfil)))
+end
+;; =====================================================================
+;; MOTOR DE SIMULAÇÃO
+;; =====================================================================
+to go
+  if dia-concluido? and ticks > 0 [
+    finalizar-dia
+    ifelse dia-atual >= dias-simulacao [ stop ] [ iniciar-novo-dia ]
+    set tick-inicio-do-dia ticks
+  ]
+  atualizar-semaforo
+  ask (turtles with [ breed != estacoes-bike and breed != trens and breed != onibus ]) [
+    disparar-saidas-do-dia
+  ]
+  ask (turtles with [
+    breed != estacoes-bike and breed != trens and breed != onibus
+    and not hidden?
+    and fase-movimento != "em-casa-ida"
+    and fase-movimento != "em-casa-volta"
+    and fase-movimento != "no-destino"
+  ]) [
+    if cadeia-escolhida = "" and direcao-viagem = "ida" [ escolher-cadeia ]
+    mover-para-destino
+  ]
+  ask trens  [ mover-trem   ]
+  despachar-onibus
+  ask onibus [ mover-onibus ]
+  amostrar-densidades
+  tick
+end
+to disparar-saidas-do-dia
+  if not ja-saiu-ida?
+     and tick-do-dia >= tick-saida-ida
+     and fase-movimento = "em-casa-ida" [
+    set ja-saiu-ida? true
+    set fase-movimento "caminhando"
+    set direcao-viagem "ida"
+    set tick-inicio-viagem ticks
+  ]
+  if not ja-saiu-volta?
+     and tick-do-dia >= tick-saida-volta
+     and fase-movimento = "no-destino" [
+    set ja-saiu-volta? true
+    set direcao-viagem "volta"
+    set virou-veiculo? false
+    set embarcou? false
+    set velocidade-atual 0
+    set velocidades-amostradas []
+    set tick-inicio-viagem ticks
+    set faixa-atual "externa"
+    set dentro-de-trem nobody
+    recalcular-cadeia-volta
+    iniciar-volta-conforme-modo
+  ]
+end
+to iniciar-volta-conforme-modo
+  ifelse modo-acesso = "onibus" [
+    setxy 4 -26
+    set fase-movimento "esperando-onibus-volta"
+    set linha-do-agente decidir-linha-por-casa
+    let alvo parada-mais-proxima
+    set parada-origem-x item 0 alvo
+    set parada-origem-y item 1 alvo
+    set shape "person"  set color cor-original  set virou-veiculo? false
+  ] [
+    ifelse usa-trem? [
+      setxy -7 -26
+      set fase-movimento "esperando-trem"
+      set shape "person"  set color cor-original
+    ] [
+      ifelse modo-acesso = "bike" and ciclovia
+        [ setxy 3 -24 ]
+        [ setxy 2 -24 ]
+      set heading 0
+      set fase-movimento "na-avenida"
+      virar-veiculo
+    ]
+  ]
+end
+to atualizar-semaforo
+  set ticks-semaforo ticks-semaforo + 1
+  ifelse estado-semaforo = "verde-carros" [
+    if ticks-semaforo >= 60 [ set estado-semaforo "verde-pedestres"  set ticks-semaforo 0 ]
+  ] [
+    if ticks-semaforo >= 20 [ set estado-semaforo "verde-carros"     set ticks-semaforo 0 ]
+  ]
+end
+;; Registra o pico diário de ocupação da avenida, além da média corrente,
+;; e os picos diários de ocupação do bicicletário e da frota
+;; compartilhada, que sobem e descem ao longo do dia.
+to amostrar-densidades
+  let n-av count patches with [ pcolor = 2 ]
+  if n-av > 0 [
+    let d-av (count (turtles-on patches with [ pcolor = 2 ]) with [
+      breed != estacoes-bike and breed != trens and breed != onibus and not hidden?
+    ]) / n-av
+    set densidade-avenida-hoje (densidade-avenida-hoje + d-av) / 2
+    if d-av > densidade-avenida-pico [ set densidade-avenida-pico d-av ]
+  ]
+  ifelse ciclovia [
+    let bikes-na-ciclovia count turtles with [
+      modo-acesso = "bike"
+      and not hidden?
+      and [pcolor] of patch-here = 15
+    ]
+    let d-cv bikes-na-ciclovia / n-agentes-total
+    if d-cv > densidade-ciclovia-hoje [
+      set densidade-ciclovia-hoje d-cv
+    ]
+  ] [
+    set densidade-ciclovia-hoje 0
+  ]
+  if bicicletario-ocupadas-hoje > pico-bicicletario-hoje
+    [ set pico-bicicletario-hoje bicicletario-ocupadas-hoje ]
+  if bikes-em-transito > pico-bikes-uso-hoje
+    [ set pico-bikes-uso-hoje bikes-em-transito ]
+end
+to-report decidir-linha-por-casa
+  ifelse casa-y > 20 [ report 1 ] [ report 2 ]
+end
+;; =====================================================================
+;; ATRIBUTOS DE TEMPO E ESFORÇO
+;; =====================================================================
+to-report tempo-carro   report t-fixo-carro  + t-dist-carro  * distancia-viagem + t-cong-carro  * transito-ontem end
+to-report tempo-onibus  report t-fixo-onibus + t-dist-onibus * distancia-viagem + t-cong-onibus * transito-ontem end
+to-report tempo-moto    report t-fixo-moto   + t-dist-moto   * distancia-viagem + t-cong-moto   * transito-ontem end
+to-report tempo-bike
+  let coef ifelse-value ciclovia [ t-dist-bike * fator-cic-tempo ] [ t-dist-bike ]
+  report t-fixo-bike + coef * distancia-viagem
+end
+to-report esforco-bike
+  let excedente max (list 0 (distancia-viagem - tolerancia-esforco))
+  let esf excedente * fator-esforco-val
+  report ifelse-value ciclovia [ esf * fator-cic-esforco ] [ esf ]
+end
+;; =====================================================================
+;; RECÁLCULO MODAL NA VOLTA
+;; =====================================================================
+to recalcular-cadeia-volta
+  if modo-acesso = "carro" or modo-acesso = "moto" [ set virou-veiculo? false  stop ]
+  if modo-acesso = "bike" and possui-bike?          [ set virou-veiculo? false  stop ]
+  let insg-bike desutilidade-inseguranca-bike
+  let aglo-bike desconforto-aglomeracao-bike densidade-ciclovia-hoje
+  let t-onibus tempo-onibus
+  let t-bike   tempo-bike
+  let t-trem-leg 33
+  let c-onibus 38  let c-bike 5  let c-trem-leg 14
+  let s-onibus 20
+  let d-onibus (43 + uso-onibus-media * 0.3)
+  let d-bike   82 + esforco-bike + aglo-bike
+  let v-onibus 57  let v-bike 15  let v-trem 15
+  if clima-hoje = "chuva" [ set d-bike d-bike + 80 ]
+  let pen-stockout memoria-stock-out * 30
+  let bike-ok? (bike-sharing and [bikes-locais] of one-of estacoes-bike with [ tipo-estacao = "terminal" ] > 0)
+  let u-od desutilidade t-onibus c-onibus s-onibus d-onibus v-onibus
+  let u-ot desutilidade (t-onibus * 0.5 + t-trem-leg) (c-onibus * 0.5 + c-trem-leg) s-onibus (d-onibus + 150) (min (list v-onibus v-trem))
+  let u-bd desutilidade t-bike c-bike insg-bike d-bike v-bike
+  let u-bt desutilidade (t-bike * 0.5 + t-trem-leg) (c-bike * 0.5 + c-trem-leg) insg-bike (d-bike + 20) (min (list v-bike v-trem))
+  if not bike-ok? [ set u-bd u-bd + 99999  set u-bt u-bt + 99999 ]
+  set u-bd u-bd + pen-stockout
+  set u-bt u-bt + pen-stockout
+  let utilidades (list u-od u-ot u-bd u-bt)
+  let nomes      (list "onibus-direto" "onibus-trem" "bike-direto" "bike-trem")
+  let nova-cadeia escolher-por-logit utilidades nomes
+  set cadeia-escolhida nova-cadeia
+  set usa-trem? (member? "trem" nova-cadeia)
+  ifelse member? "onibus" nova-cadeia [
+    set modo-acesso "onibus"  set velocidade-maxima 0.3
+  ] [
+    set modo-acesso "bike"    set velocidade-maxima 0.25
+    if not possui-bike? [
+      let terminal one-of estacoes-bike with [ tipo-estacao = "terminal" ]
+      if terminal != nobody and [bikes-locais] of terminal > 0 [
+        ask terminal [ set bikes-locais bikes-locais - 1 ]
+        set bikes-em-transito bikes-em-transito + 1
+        set usou-bike-compartilhada-ida? true
+      ]
+    ]
+  ]
+  set virou-veiculo? false
+end
+;; =====================================================================
+;; FINALIZAR DIA
+;; =====================================================================
+to finalizar-dia
+  ;; Índice de congestionamento: razão entre a velocidade livre de
+  ;; referência e a velocidade média observada dos modos que circulam
+  ;; na via, normalizada em 50.
+  let medias-validas filter [ v -> v > 0 ]
+    (list velocidade-media-carros-hoje velocidade-media-motos-hoje velocidade-media-onibus-hoje)
+  set velocidade-media-ontem ifelse-value (length medias-validas > 0)
+    [ (sum medias-validas) / (length medias-validas) ]
+    [ velocidade-livre-media ]
+  set transito-ontem (velocidade-livre-media / (velocidade-media-ontem + 0.01)) * 50
+  set pct-auto-final           pct-auto
+  set pct-trem-final           pct-trem-metro
+  set pct-onibus-final         pct-onibus-puro
+  set pct-moto-final           pct-moto
+  set pct-bike-final           pct-bike
+  set densidade-ciclovia-final densidade-ciclovia-hoje
+  atualizar-grafico
+  set uso-bike-media   (0.7 * uso-bike-media)   + (0.3 * uso-bike-hoje)
+  set uso-moto-media   (0.7 * uso-moto-media)   + (0.3 * uso-moto-hoje)
+  set uso-onibus-media (0.7 * uso-onibus-media) + (0.3 * uso-onibus-hoje)
+  set densidade-ciclovia-ontem densidade-ciclovia-hoje
+  set hist-pct-auto   lput pct-auto-final   hist-pct-auto
+  set hist-pct-trem   lput pct-trem-final   hist-pct-trem
+  set hist-pct-onibus lput pct-onibus-final hist-pct-onibus
+  set hist-pct-moto   lput pct-moto-final   hist-pct-moto
+  set hist-pct-bike   lput pct-bike-final   hist-pct-bike
+  set hist-bike-media lput uso-bike-media   hist-bike-media
+  ;; grava antes do reset dos contadores diários
+  set hist-vel-carro    lput velocidade-media-carros-hoje  hist-vel-carro
+  set hist-vel-moto     lput velocidade-media-motos-hoje   hist-vel-moto
+  set hist-vel-onibus   lput velocidade-media-onibus-hoje  hist-vel-onibus
+  set hist-vel-bike     lput velocidade-media-bikes-hoje   hist-vel-bike
+  set hist-transito     lput transito-ontem                hist-transito
+  set hist-dens-avenida lput densidade-avenida-pico        hist-dens-avenida
+  set hist-dens-ciclovia     lput densidade-ciclovia-hoje   hist-dens-ciclovia
+  set hist-pico-bicicletario lput pico-bicicletario-hoje    hist-pico-bicicletario
+  set hist-carro-trem        lput uso-carro-trem-hoje       hist-carro-trem
+  set hist-moto-trem         lput uso-moto-trem-hoje        hist-moto-trem
+  set hist-stockouts         lput stockouts-bairro-hoje     hist-stockouts
+  set hist-bloqueios         lput bloqueios-devolucao-hoje  hist-bloqueios
+  set hist-pico-bikes-uso    lput pico-bikes-uso-hoje       hist-pico-bikes-uso
+  set hist-cad-carro-d  lput pct-carro-direto   hist-cad-carro-d
+  set hist-cad-carro-t  lput pct-carro-trem     hist-cad-carro-t
+  set hist-cad-onibus-d lput pct-onibus-direto  hist-cad-onibus-d
+  set hist-cad-onibus-t lput pct-onibus-trem    hist-cad-onibus-t
+  set hist-cad-moto-d   lput pct-moto-direto    hist-cad-moto-d
+  set hist-cad-moto-t   lput pct-moto-trem      hist-cad-moto-t
+  set hist-cad-bike-d   lput pct-bike-direto    hist-cad-bike-d
+  set hist-cad-bike-t   lput pct-bike-trem      hist-cad-bike-t
+  registrar-perfis
+  set hist-bike-compartilhada lput uso-bike-compartilhada-hoje hist-bike-compartilhada
+  ask (turtles with [ breed != estacoes-bike and breed != trens and breed != onibus ]) [
+    ifelse teve-stockout-hoje?
+      [ set memoria-stock-out memoria-stock-out + 1 ]
+      [ set memoria-stock-out max (list 0 (memoria-stock-out - 1)) ]
+  ]
+end
+to-report media-da-lista [ lst ]
+  if empty? lst [ report 0 ]
+  report (sum lst) / (length lst)
+end
+to-report media-ultimos-dias [ lst n ]
+  if empty? lst [ report 0 ]
+  let janela sublist lst (max (list 0 (length lst - n))) (length lst)
+  report (sum janela) / (length janela)
+end
+to-report serie-diaria [ lst ]
+  if empty? lst [ report "" ]
+  report reduce [ [a b] -> (word a ";" b) ]
+         (map [ v -> precision v 4 ] lst)
+end
+to iniciar-novo-dia
+  set dia-atual dia-atual + 1
+  sortear-clima
+  ask estacoes-bike [ set bikes-locais 0 ]
+  distribuir-frota-inicial
+  resetar-contadores-do-dia
+  ask (turtles with [ breed != estacoes-bike and breed != trens and breed != onibus ]) [
+    show-turtle
+    set cadeia-escolhida ""  set modo-acesso ""  set usa-trem? false  set embarcou? false
+    set virou-veiculo? false
+    set velocidade-atual 0   set velocidade-maxima 0.2
+    set tick-inicio-viagem 0  set velocidades-amostradas []
+    set direcao-viagem "ida"
+    set cadeia-ida ""
+    set usou-bike-compartilhada-ida? false
+    set teve-stockout-hoje? false
+    set sem-bike-disponivel? false
+    set faixa-atual "externa"
+    set shape "person"  set color cor-original
+    setxy casa-x casa-y
+    set dentro-de-trem nobody
+    set linha-do-agente 0
+    set parada-origem-x 0  set parada-origem-y 0
+    set fase-movimento "em-casa-ida"
+    set ja-saiu-ida? false  set ja-saiu-volta? false
+  ]
+  ask trens [
+    setxy -5 -1  set heading 180
+    set estado-trem "aguardando-horario"
+    set ticks-parado-trem 0
+    set passageiros []
+    set direcao-passageiros ""
+    set tick-de-saida-trem (ordem-trem * (headway-trem-min-val * ticks-por-hora / 60))
+    hide-turtle
+  ]
+  ask onibus [ die ]
+  set tick-ultimo-despacho-rosa  -99999
+  set tick-ultimo-despacho-verde -99999
+end
+;; =====================================================================
+;; MODELO DE UTILIDADE ALEATÓRIA (MNL)
+;; =====================================================================
+to-report desutilidade [ tempo custo inseguranca desconforto variabilidade ]
+  report (beta-tempo     * tempo)
+       + (beta-custo     * custo)
+       + (beta-seguranca * inseguranca)
+       + (beta-conforto  * desconforto)
+       + (beta-confiab   * variabilidade)
+       + random-float ruido-escolha-val
+end
+to-report escolher-por-logit [ utilidades nomes ]
+  let exps map [ u -> exp (- u / mu-logit-val) ] utilidades
+  let soma sum exps
+  if soma = 0 [ report item (position (min utilidades) utilidades) nomes ]
+  let probs map [ x -> x / soma ] exps
+  let r random-float 1
+  let acc 0
+  let i 0
+  foreach probs [ p ->
+    set acc acc + p
+    if r <= acc [ report item i nomes ]
+    set i i + 1
+  ]
+  report last nomes
+end
+to-report inseguranca-base
+  ;; Com sin-congelado? ligado, o termo fica fixo no nível que
+  ;; corresponde à população ciclística de equilíbrio da linha de base
+  ;; (uso-bike-referencia, 16,08 agentes), de modo que o crescimento do
+  ;; uso da bicicleta deixa de reduzir a insegurança percebida sem
+  ;; alterar o ponto de partida calibrado.
+  let n-ref ifelse-value sin-congelado? [ uso-bike-referencia ] [ uso-bike-media ]
+  report nivel-violencia-base * exp (- decaimento-safety-val * n-ref)
+end
+to-report desutilidade-inseguranca-bike
+  ifelse ciclovia
+    [ report inseguranca-base * fator-cic-inseguranca ]
+    [ report inseguranca-base ]
+end
+;; Com moto-recebe-sin? ligado, a insegurança da motocicleta deriva do
+;; mesmo valor de referência que a da bicicleta e decai conforme a
+;; população ciclística cresce. A premissa de que o safety-in-numbers
+;; gerado por ciclistas se transfere a motociclistas não encontra
+;; respaldo na literatura, que define o efeito na interação entre
+;; veículos motorizados e usuários não motorizados. Com o switch
+;; desligado, a insegurança da motocicleta fica fixa no nível que ela tem
+;; na linha de base, o que isola o efeito da premissa sem alterar o ponto
+;; de partida calibrado.
+to-report inseguranca-moto
+  ifelse moto-recebe-sin?
+    [ report inseguranca-base * risco-moto-val ]
+    [ report nivel-violencia-base * exp (- decaimento-safety-val * uso-bike-referencia) * risco-moto-val ]
+end
+to-report desconforto-aglomeracao-bike [ densidade ]
+  if not ciclovia [ report 0 ]
+  if densidade <= limite-saturacao-ciclovia [ report 0 ]
+  report (densidade - limite-saturacao-ciclovia) * 100
+end
+to escolher-cadeia
+  if direcao-viagem = "volta" [ stop ]
+  let t-carro  tempo-carro
+  let t-onibus tempo-onibus
+  let t-moto   tempo-moto
+  let t-bike   tempo-bike
+  let t-trem-leg 33
+  let c-carro  25  let c-onibus 38
+  let c-moto   20  let c-bike    5  let c-trem-leg 14
+  let s-carro  10  let s-onibus 20
+  let s-moto   inseguranca-moto
+  let s-bike   desutilidade-inseguranca-bike
+  let d-carro   5
+  let d-onibus (43 + uso-onibus-media * 0.3)
+  let d-moto   27
+  let d-bike   82 + esforco-bike + (desconforto-aglomeracao-bike densidade-ciclovia-ontem)
+  let v-carro  (transito-ontem * 0.3)
+  let v-onibus 57  let v-moto 25  let v-bike 15  let v-trem 15
+  if clima-hoje = "chuva" [
+    set d-bike d-bike + 80
+    set d-moto d-moto + 50
+  ]
+  let u-carro-direto  desutilidade t-carro  c-carro  s-carro  d-carro  v-carro
+  let u-onibus-direto desutilidade t-onibus c-onibus s-onibus d-onibus v-onibus
+  let u-moto-direto   desutilidade t-moto   c-moto   s-moto   d-moto   v-moto
+  let u-bike-direto   desutilidade t-bike   c-bike   s-bike   d-bike   v-bike
+  let u-carro-trem  desutilidade (t-carro  * 0.5 + t-trem-leg) (c-carro  * 0.5 + c-trem-leg) s-carro  (d-carro  + 30)  (min (list v-carro  v-trem))
+  let u-onibus-trem desutilidade (t-onibus * 0.5 + t-trem-leg) (c-onibus * 0.5 + c-trem-leg) s-onibus (d-onibus + 150) (min (list v-onibus v-trem))
+  let u-moto-trem   desutilidade (t-moto   * 0.5 + t-trem-leg) (c-moto   * 0.5 + c-trem-leg) s-moto   (d-moto   + 30)  (min (list v-moto   v-trem))
+  let u-bike-trem   desutilidade (t-bike   * 0.5 + t-trem-leg) (c-bike   * 0.5 + c-trem-leg) s-bike   (d-bike   + 20)  (min (list v-bike   v-trem))
+  if bicicletario-ocupadas-hoje >= vagas-bicicletario [
+    set u-bike-trem u-bike-trem + 99999
+  ]
+  if uso-carro-trem-hoje >= vagas-carro-estacao [ set u-carro-trem u-carro-trem + 99999 ]
+  if uso-moto-trem-hoje  >= vagas-moto-estacao  [ set u-moto-trem  u-moto-trem  + 99999 ]
+  if not possui-carro? [
+    set u-carro-direto u-carro-direto + 99999
+    set u-carro-trem   u-carro-trem   + 99999
+  ]
+  if not possui-moto? [
+    set u-moto-direto u-moto-direto + 99999
+    set u-moto-trem   u-moto-trem   + 99999
+  ]
+  if not possui-bike? and not bike-sharing [
+    set u-bike-direto u-bike-direto + 99999
+    set u-bike-trem   u-bike-trem   + 99999
+  ]
+  ;; quem encontrou as estações vazias escolhe outra cadeia
+  if sem-bike-disponivel? [
+    set u-bike-direto u-bike-direto + 99999
+    set u-bike-trem   u-bike-trem   + 99999
+  ]
+  if not possui-bike? [
+    let pen-stockout memoria-stock-out * 30
+    set u-bike-direto u-bike-direto + pen-stockout
+    set u-bike-trem   u-bike-trem   + pen-stockout
+  ]
+  let utilidades (list u-carro-direto u-carro-trem u-onibus-direto u-onibus-trem
+                       u-moto-direto  u-moto-trem  u-bike-direto   u-bike-trem)
+  let nomes      (list "carro-direto" "carro-trem" "onibus-direto" "onibus-trem"
+                       "moto-direto"  "moto-trem"  "bike-direto"   "bike-trem")
+  aplicar-cadeia (escolher-por-logit utilidades nomes)
+end
+to aplicar-cadeia [ nome ]
+  ;; Quem escolhe a bicicleta compartilhada e encontra todas as estações
+  ;; de bairro vazias registra a falha e escolhe entre as demais cadeias.
+  if bike-sharing and not possui-bike? and member? "bike" nome [
+    if not any? estacoes-bike with [ tipo-estacao = "bairro" and bikes-locais > 0 ] [
+      set stockouts-bairro-hoje stockouts-bairro-hoje + 1
+      set teve-stockout-hoje? true
+      set sem-bike-disponivel? true
+      escolher-cadeia
+      stop
+    ]
+  ]
+  set cadeia-escolhida nome
+  set cadeia-ida nome
+  set usa-trem? (member? "trem" nome)
+  ifelse member? "carro" nome [
+    set modo-acesso "carro"   set velocidade-maxima 0.4
+    set uso-carro-hoje uso-carro-hoje + 1
+  ] [ ifelse member? "onibus" nome [
+    set modo-acesso "onibus"  set velocidade-maxima 0.2
+    set uso-onibus-hoje uso-onibus-hoje + 1
+    set linha-do-agente decidir-linha-por-casa
+  ] [ ifelse member? "moto" nome [
+    set modo-acesso "moto"    set velocidade-maxima 0.5
+    set uso-moto-hoje uso-moto-hoje + 1
+  ] [
+    set modo-acesso "bike"    set velocidade-maxima 0.25
+    set uso-bike-hoje     uso-bike-hoje     + 1
+    set uso-bike-ida-hoje uso-bike-ida-hoje + 1
+    if not possui-bike? [
+      let candidatas estacoes-bike with [ tipo-estacao = "bairro" and bikes-locais > 0 ]
+      ifelse any? candidatas [
+        let origem min-one-of candidatas [ distance myself ]
+        ask origem [ set bikes-locais bikes-locais - 1 ]
+        set bikes-em-transito bikes-em-transito + 1
+        set uso-bike-compartilhada-hoje uso-bike-compartilhada-hoje + 1
+        set usou-bike-compartilhada-ida? true
+      ] [
+        set stockouts-bairro-hoje stockouts-bairro-hoje + 1
+        set teve-stockout-hoje? true
+      ]
+    ]
+  ] ] ]
+  if nome = "carro-direto"  [ set uso-carro-direto-hoje  uso-carro-direto-hoje  + 1 ]
+  if nome = "carro-trem"    [ set uso-carro-trem-hoje    uso-carro-trem-hoje    + 1
+                              set uso-trem-hoje uso-trem-hoje + 1 ]
+  if nome = "onibus-direto" [ set uso-onibus-direto-hoje uso-onibus-direto-hoje + 1 ]
+  if nome = "onibus-trem"   [ set uso-onibus-trem-hoje   uso-onibus-trem-hoje   + 1
+                              set uso-trem-hoje uso-trem-hoje + 1 ]
+  if nome = "moto-direto"   [ set uso-moto-direto-hoje   uso-moto-direto-hoje   + 1 ]
+  if nome = "moto-trem"     [ set uso-moto-trem-hoje     uso-moto-trem-hoje     + 1
+                              set uso-trem-hoje uso-trem-hoje + 1 ]
+  if nome = "bike-direto"   [ set uso-bike-direto-hoje   uso-bike-direto-hoje   + 1 ]
+  if nome = "bike-trem"     [ set uso-bike-trem-hoje     uso-bike-trem-hoje     + 1
+                              set uso-trem-hoje uso-trem-hoje + 1
+                              ifelse possui-bike?
+                                [ set bicicletario-ocupadas-hoje bicicletario-ocupadas-hoje + 1 ]
+                                [ devolver-bike-no-terminal ] ]
+end
+to devolver-bike-no-terminal
+  let terminal one-of estacoes-bike with [ tipo-estacao = "terminal" ]
+  ifelse terminal != nobody and [bikes-locais < capacidade-vagas] of terminal [
+    ask terminal [ set bikes-locais bikes-locais + 1 ]
+    set bikes-em-transito bikes-em-transito - 1
+  ] [
+    set bloqueios-devolucao-hoje bloqueios-devolucao-hoje + 1
+  ]
+end
+to devolver-bike-em-bairro
+  if not bike-sharing [ stop ]
+  let candidatas estacoes-bike with [ tipo-estacao = "bairro" and bikes-locais < capacidade-vagas ]
+  ifelse any? candidatas [
+    let destino min-one-of candidatas [ distance myself ]
+    ask destino [ set bikes-locais bikes-locais + 1 ]
+    set bikes-em-transito bikes-em-transito - 1
+  ] [
+    set bloqueios-devolucao-hoje bloqueios-devolucao-hoje + 1
+  ]
+end
+;; =====================================================================
+;; INDICADORES
+;; =====================================================================
+to-report total-viagens-hoje
+  report uso-carro-hoje + uso-onibus-hoje + uso-moto-hoje + uso-bike-hoje
+end
+to-report pct-trem-metro
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * uso-trem-hoje / total-viagens-hoje
+end
+to-report pct-onibus-puro
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * uso-onibus-direto-hoje / total-viagens-hoje
+end
+to-report pct-auto
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * uso-carro-direto-hoje / total-viagens-hoje
+end
+to-report pct-moto
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * uso-moto-direto-hoje / total-viagens-hoje
+end
+to-report pct-bike
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * uso-bike-direto-hoje / total-viagens-hoje
+end
+to-report pct-usa-trem
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * uso-trem-hoje / total-viagens-hoje
+end
+to-report pct-carro-direto   report pct-de uso-carro-direto-hoje   end
+to-report pct-carro-trem     report pct-de uso-carro-trem-hoje     end
+to-report pct-onibus-direto  report pct-de uso-onibus-direto-hoje  end
+to-report pct-onibus-trem    report pct-de uso-onibus-trem-hoje    end
+to-report pct-moto-direto    report pct-de uso-moto-direto-hoje    end
+to-report pct-moto-trem      report pct-de uso-moto-trem-hoje      end
+to-report pct-bike-direto    report pct-de uso-bike-direto-hoje    end
+to-report pct-bike-trem      report pct-de uso-bike-trem-hoje      end
+to-report pct-de [ n ]
+  if total-viagens-hoje = 0 [ report 0 ]
+  report 100 * n / total-viagens-hoje
+end
+to-report distancia-media    report mean [distancia-viagem] of turtles with [ breed != estacoes-bike and breed != trens and breed != onibus ] end
+to-report distancia-minima   report min  [distancia-viagem] of turtles with [ breed != estacoes-bike and breed != trens and breed != onibus ] end
+to-report distancia-maxima   report max  [distancia-viagem] of turtles with [ breed != estacoes-bike and breed != trens and breed != onibus ] end
+;; =====================================================================
+;; MOVIMENTAÇÃO
+;; =====================================================================
+to-report em-via?            report pcolor = 7 or pcolor = 2 or pcolor = 15 or pcolor = 9.9 end
+to-report em-via-horizontal? report pcolor = 7  end
+to-report em-avenida?        report pcolor = 2  end
+to-report em-ciclovia?       report pcolor = 15 end
+to-report e-rodoviario?      report modo-acesso = "carro" or modo-acesso = "moto" end
+to-report e-bike?            report modo-acesso = "bike" end
+;; Veículos motorizados bloqueiam entre si e são bloqueados por ônibus.
+;; Bicicletas bloqueiam bicicletas apenas na ausência de ciclovia, e não
+;; bloqueiam veículos motorizados em nenhuma circunstância.
+to-report outro-bloqueia? [ outro ]
+  if [breed] of outro = estacoes-bike [ report false ]
+  if [breed] of outro = trens         [ report false ]
+  if [breed] of outro = onibus        [ report e-rodoviario? ]
+  if [modo-acesso] of outro = ""      [ report false ]
+  if e-rodoviario? and [e-rodoviario?] of outro [ report true ]
+  if e-bike? and [e-bike?] of outro and not ciclovia [ report true ]
+  report false
+end
+;; Avalia o bloqueio no contexto do próprio agente, passando o outro
+;; como argumento.
+to-report ha-bloqueio-em? [ p ]
+  if p = nobody [ report false ]
+  let eu self
+  let vizinhos [ self ] of ((turtles-on p) with [ self != eu and not hidden? ])
+  let bloqueio? false
+  foreach vizinhos [ v -> if outro-bloqueia? v [ set bloqueio? true ] ]
+  report bloqueio?
+end
+to-report faixa-mao-direita-horizontal [ direcao ]
+  ifelse direcao = 90 [ report -1 ] [ report 1 ]
+end
+to-report y-ciclovia-mao-direita [ y-centro direcao ]
+  ifelse direcao = 90 [ report y-centro - 2 ] [ report y-centro + 2 ]
+end
+to-report alvo-x-avenida
+  ifelse direcao-viagem = "ida" [
+    if modo-acesso = "bike" and ciclovia [ report -3 ]
+    ifelse faixa-atual = "interna" [ report -1 ] [ report -2 ]
+  ] [
+    if modo-acesso = "bike" and ciclovia [ report 3 ]
+    ifelse faixa-atual = "interna" [ report 1 ] [ report 2 ]
+  ]
+end
+to-report y-centro-da-via-atual
+  if abs (pycor - 28) <= 2 [ report 28 ]
+  if abs (pycor - 13) <= 2 [ report 13 ]
+  report pycor
+end
+to-report proximo-de-cruzamento?
+  report (abs (pycor - 28) <= 3) or (abs (pycor - 13) <= 3)
+end
+to virar-veiculo
+  if virou-veiculo? [ stop ]
+  if not em-via? [ stop ]
+  if modo-acesso = "carro" [ set shape "car top"    set color magenta ]
+  if modo-acesso = "moto"  [ set shape "motorcycle" set color orange ]
+  if modo-acesso = "bike"  [ set shape "bike"       set color green ]
+  set virou-veiculo? true
+end
+to virar-pedestre
+  if not virou-veiculo? [ stop ]
+  if em-via? [ stop ]
+  set shape "person"  set color cor-original  set virou-veiculo? false
+end
+to atualizar-velocidade
+  set velocidade-atual min (list velocidade-maxima (velocidade-atual + 0.1))
+  let dl conta-patches-livres-a-frente
+  if dl < 1 [ set velocidade-atual 0 ]
+  if dl >= 1 and dl < 2 [ set velocidade-atual min (list velocidade-atual 0.2) ]
+  if estado-semaforo = "verde-pedestres" and em-avenida? and proximo-de-cruzamento? and e-rodoviario? [
+    set velocidade-atual 0
+  ]
+  if random 100 < 10 and velocidade-atual > 0.1 [ set velocidade-atual velocidade-atual - 0.05 ]
+  set velocidades-amostradas lput velocidade-atual velocidades-amostradas
+end
+to-report conta-patches-livres-a-frente
+  let contagem 0
+  let i 1
+  while [ i <= 3 ] [
+    let p patch-ahead i
+    if p = nobody [ report contagem ]
+    ifelse ha-bloqueio-em? p
+      [ report contagem ]
+      [ set contagem contagem + 1 ]
+    set i i + 1
+  ]
+  report contagem
+end
+to tentar-ultrapassagem
+  if not e-rodoviario? [ stop ]
+  if not em-avenida?   [ stop ]
+  let x-ext ifelse-value (direcao-viagem = "ida") [-2] [2]
+  let x-int ifelse-value (direcao-viagem = "ida") [-1] [1]
+  if faixa-atual = "externa" and onibus-parado-a-frente? [
+    let p1i patch x-int ([pycor] of patch-ahead 1)
+    if not ha-bloqueio-em? p1i [
+      set faixa-atual "interna"  set xcor x-int  stop
+    ]
+  ]
+  if faixa-atual = "externa" [
+    let bloqueio? false
+    foreach (list (patch-ahead 1) (patch-ahead 2)) [ pp ->
+      if ha-bloqueio-em? pp [ set bloqueio? true ]
+    ]
+    if bloqueio? [
+      let livre? true
+      foreach (list (patch x-int ([pycor] of patch-ahead 1))
+                    (patch x-int ([pycor] of patch-ahead 2))) [ pp ->
+        if ha-bloqueio-em? pp [ set livre? false ]
+      ]
+      if livre? [ set faixa-atual "interna"  set xcor x-int ]
+    ]
+  ]
+  if faixa-atual = "interna" and not onibus-parado-a-frente? [
+    let livre? true
+    foreach (list (patch x-ext ([pycor] of patch-ahead 1))
+                  (patch x-ext ([pycor] of patch-ahead 2))) [ pp ->
+      if ha-bloqueio-em? pp [ set livre? false ]
+    ]
+    if livre? [ set faixa-atual "externa"  set xcor x-ext ]
+  ]
+end
+to-report onibus-parado-a-frente?
+  let achou? false
+  let i 1
+  while [ i <= 2 and not achou? ] [
+    let p patch-ahead i
+    if p != nobody and any? (turtles-on p) with [
+      breed = onibus and not hidden?
+      and member? estado-onibus ["parado-terminal" "parado-estacao" "parado-leste" "parado-oeste"]
+    ] [ set achou? true ]
+    set i i + 1
+  ]
+  report achou?
+end
+to-report parada-y-linha [ linha ]
+  ifelse linha = 1 [ report 28 ] [ report 13 ]
+end
+to-report parada-mais-proxima
+  let y-l parada-y-linha linha-do-agente
+  ifelse abs (casa-x - (-22)) <= abs (casa-x - 22)
+    [ report (list -22 y-l) ]
+    [ report (list  22 y-l) ]
+end
+to-report posicao-aleatoria-no-destino
+  let p one-of patches with [ pcolor = blue ]
+  report (list [pxcor] of p [pycor] of p)
+end
+to mover-para-destino
+  if direcao-viagem = "ida" and pycor <= -25 and modo-acesso != "onibus" [
+    if cadeia-escolhida = "bike-direto" and not possui-bike? [
+      set bikes-em-transito bikes-em-transito - 1
+    ]
+    registrar-fim-de-viagem
+    set fase-movimento "no-destino"
+    let pos posicao-aleatoria-no-destino
+    setxy item 0 pos item 1 pos
+    set shape "person"  set color cor-original  set virou-veiculo? false
+    stop
+  ]
+  if direcao-viagem = "volta"
+     and fase-movimento = "voltando-pra-casa"
+     and distancexy casa-x casa-y < 0.5 [
+    if modo-acesso = "bike" and not possui-bike? and usou-bike-compartilhada-ida? [
+      devolver-bike-em-bairro
+    ]
+    registrar-fim-de-viagem
+    set fase-movimento "em-casa-volta"
+    setxy casa-x casa-y
+    set shape "person"  set color cor-original  set virou-veiculo? false
+    stop
+  ]
+  if modo-acesso = "onibus" and not embarcou? and direcao-viagem = "ida"
+     and fase-movimento != "esperando-onibus-ida" [
+    let alvo parada-mais-proxima
+    let ax item 0 alvo  let ay item 1 alvo
+    facexy ax ay
+    ifelse distancexy ax ay < 0.5 [
+      setxy ax ay
+      set parada-origem-x ax  set parada-origem-y ay
+      set fase-movimento "esperando-onibus-ida"
+      set shape "person"  set color cor-original  set virou-veiculo? false
+    ] [ forward 0.2 ]
+    stop
+  ]
+  if fase-movimento = "esperando-onibus-ida"   [ stop ]
+  if fase-movimento = "esperando-onibus-volta" [ stop ]
+  ;; A transferência para a estação reconhece a ciclovia, onde o patch
+  ;; tem cor 15 e não satisfaz em-avenida?.
+  if usa-trem? and not embarcou? and direcao-viagem = "ida" and modo-acesso != "onibus" [
+    if ((em-avenida? or em-ciclovia?) and pycor <= 3 and pycor >= -2)
+       or (pycor < -2 and pycor > -25)
+       or (pxcor >= 1 and pycor <= 3 and pycor >= -2) [
+      set shape "person"  set color cor-original  set virou-veiculo? false
+      setxy -7 1
+      set fase-movimento "esperando-trem"
+      stop
+    ]
+  ]
+  if fase-movimento = "esperando-trem" [ stop ]
+  if not virou-veiculo? and em-via? and modo-acesso != "onibus" [ virar-veiculo ]
+  if fase-movimento = "caminhando-pra-casa" [
+    virar-pedestre
+    facexy casa-x casa-y
+    forward 0.2
+    if distancexy casa-x casa-y < 0.5 [ set fase-movimento "voltando-pra-casa" ]
+    stop
+  ]
+  if fase-movimento = "saindo-estacao-trem" [
+    if direcao-viagem = "volta" and cadeia-ida = "bike-trem" and possui-bike? [
+      set bicicletario-ocupadas-hoje max (list 0 (bicicletario-ocupadas-hoje - 1))
+    ]
+    let alvo alvo-x-avenida
+    set heading (ifelse-value (xcor < alvo) [90] [270])
+    forward 0.2
+    if abs (xcor - alvo) < 0.3 [
+      set xcor alvo
+      set fase-movimento "na-avenida"
+      set heading 0
+      virar-veiculo
+    ]
+    stop
+  ]
+  if fase-movimento = "caminhando" [
+    let alvo-cor ifelse-value (modo-acesso = "bike" and ciclovia) [15] [7]
+    let via-alvo min-one-of (patches with [ pcolor = alvo-cor ]) [ distance myself ]
+    ifelse via-alvo != nobody [ face via-alvo ] [
+      ifelse direcao-viagem = "volta" [ set heading 0 ] [ set heading 180 ]
+    ]
+    forward 0.2
+    if (modo-acesso = "bike" and ciclovia and em-ciclovia?)
+       or ((modo-acesso != "bike" or not ciclovia) and em-via-horizontal?) [
+      set fase-movimento "na-via-horizontal"
+      let alvo alvo-x-avenida
+      let direcao ifelse-value (pxcor > alvo) [270] [90]
+      set heading direcao
+      let y-centro y-centro-da-via-atual
+      let y-alvo ifelse-value (modo-acesso = "bike" and ciclovia)
+        [ y-ciclovia-mao-direita y-centro direcao ]
+        [ y-centro + (faixa-mao-direita-horizontal direcao) ]
+      set y-alvo max (list min-pycor (min (list max-pycor y-alvo)))
+      set ycor y-alvo
+      if direcao-viagem = "ida" [ set via-de-ida-pycor y-centro ]
+    ]
+    stop
+  ]
+  if fase-movimento = "na-via-horizontal" [
+    let alvo alvo-x-avenida
+    let direcao heading
+    let y-centro y-centro-da-via-atual
+    let y-esp ifelse-value (modo-acesso = "bike" and ciclovia)
+      [ y-ciclovia-mao-direita y-centro direcao ]
+      [ y-centro + (faixa-mao-direita-horizontal direcao) ]
+    set y-esp max (list min-pycor (min (list max-pycor y-esp)))
+    if pycor != y-esp [ set ycor y-esp ]
+    atualizar-velocidade
+    let v velocidade-atual
+    let cruzou? ifelse-value (direcao = 270)
+      [ xcor > alvo and (xcor - v) <= alvo ]
+      [ xcor < alvo and (xcor + v) >= alvo ]
+    ifelse cruzou? [
+      set xcor alvo
+      if not (modo-acesso = "bike" and ciclovia) [ set ycor y-centro ]
+      set fase-movimento "na-avenida"
+      set heading ifelse-value (direcao-viagem = "ida") [180] [0]
+      set velocidade-atual 0
+    ] [
+      if v > 0 [ forward v ]
+    ]
+    stop
+  ]
+  if fase-movimento = "na-avenida" [
+    if e-rodoviario? [ tentar-ultrapassagem ]
+    if xcor != alvo-x-avenida [ set xcor alvo-x-avenida ]
+    set heading ifelse-value (direcao-viagem = "ida") [180] [0]
+    atualizar-velocidade
+    if velocidade-atual > 0 [ forward velocidade-atual ]
+    if direcao-viagem = "volta" and abs (pycor - via-de-ida-pycor) < 1 [
+      set fase-movimento "saindo-avenida"
+      set ycor via-de-ida-pycor
+    ]
+    stop
+  ]
+  if fase-movimento = "saindo-avenida" [
+    set heading ifelse-value (casa-x > pxcor) [90] [270]
+    let direcao heading
+    let y-centro y-centro-da-via-atual
+    let y-esp ifelse-value (modo-acesso = "bike" and ciclovia)
+      [ y-ciclovia-mao-direita y-centro direcao ]
+      [ y-centro + (faixa-mao-direita-horizontal direcao) ]
+    set y-esp max (list min-pycor (min (list max-pycor y-esp)))
+    if pycor != y-esp [ set ycor y-esp ]
+    atualizar-velocidade
+    if velocidade-atual > 0 [ forward velocidade-atual ]
+    if abs (xcor - casa-x) < 1 [
+      set fase-movimento "voltando-pra-casa"
+      set heading ifelse-value (casa-y > pycor) [0] [180]
+    ]
+    stop
+  ]
+  if fase-movimento = "voltando-pra-casa" [
+    virar-pedestre
+    facexy casa-x casa-y
+    forward 0.2
+    stop
+  ]
+end
+;; O registro do modo ônibus ocorre no próprio veículo, e não no
+;; passageiro, que não se move por conta própria.
+to registrar-fim-de-viagem
+  let duracao ticks - tick-inicio-viagem
+  let nomes (list "carro-direto" "carro-trem" "onibus-direto" "onibus-trem"
+                  "moto-direto"  "moto-trem"  "bike-direto"   "bike-trem")
+  let idx position cadeia-escolhida nomes
+  if idx != false [
+    set tempos-por-cadeia replace-item idx tempos-por-cadeia
+      (lput duracao (item idx tempos-por-cadeia))
+  ]
+  if not empty? velocidades-amostradas [
+    let mi (sum velocidades-amostradas) / (length velocidades-amostradas)
+    if modo-acesso = "carro"  [ set velocidade-media-carros-hoje  media-movel velocidade-media-carros-hoje  mi ]
+    if modo-acesso = "moto"   [ set velocidade-media-motos-hoje   media-movel velocidade-media-motos-hoje   mi ]
+    if modo-acesso = "bike"   [ set velocidade-media-bikes-hoje   media-movel velocidade-media-bikes-hoje   mi ]
+  ]
+end
+to-report media-movel [ atual nova ]
+  ifelse atual = 0 [ report nova ] [ report (atual + nova) / 2 ]
+end
+;; =====================================================================
+;; SISTEMA FERROVIÁRIO
+;; =====================================================================
+to-report trem-bloqueado?
+  let eu self
+  let i 1
+  while [ i <= 3 ] [
+    let p patch-ahead i
+    if p != nobody and any? (turtles-on p) with [ breed = trens and self != eu and not hidden? ]
+      [ report true ]
+    set i i + 1
+  ]
+  report false
+end
+to mover-trem
+  let capacidade   30
+  let tempo-parado 12
+  if estado-trem = "aguardando-horario" [
+    if tick-do-dia >= tick-de-saida-trem [
+      show-turtle
+      set estado-trem "parado-est1"
+      set ticks-parado-trem 0
+    ]
+    stop
+  ]
+  if estado-trem = "parado-est1" [
+    desembarcar-passageiros
+    embarcar-candidatos (turtles with [
+      breed != estacoes-bike and breed != trens and breed != onibus
+      and fase-movimento = "esperando-trem"
+      and direcao-viagem = "ida"
+      and not hidden?
+    ]) capacidade "ida"
+    set ticks-parado-trem ticks-parado-trem + 1
+    if ticks-parado-trem >= tempo-parado [
+      set estado-trem "indo"
+      set ticks-parado-trem 0
+      setxy -5 -1  set heading 180
+    ]
+    stop
+  ]
+  if estado-trem = "indo" [
+    if not trem-bloqueado? [ forward 1.6 ]
+    if pycor <= -24 [ set estado-trem "parado-est2"  setxy -5 -24 ]
+    stop
+  ]
+  if estado-trem = "parado-est2" [
+    desembarcar-passageiros
+    embarcar-candidatos (turtles with [
+      breed != estacoes-bike and breed != trens and breed != onibus
+      and fase-movimento = "esperando-trem"
+      and direcao-viagem = "volta"
+      and not hidden?
+    ]) capacidade "volta"
+    set ticks-parado-trem ticks-parado-trem + 1
+    if ticks-parado-trem >= tempo-parado [
+      set estado-trem "voltando"
+      set ticks-parado-trem 0
+      setxy -4 -24  set heading 0
+    ]
+    stop
+  ]
+  if estado-trem = "voltando" [
+    if not trem-bloqueado? [ forward 1.6 ]
+    if pycor >= -1 [ set estado-trem "parado-est1"  setxy -4 -1 ]
+    stop
+  ]
+end
+to embarcar-candidatos [ candidatos capacidade direcao-emb ]
+  let vagas capacidade - length passageiros
+  if vagas <= 0 [ stop ]
+  let n min (list vagas count candidatos)
+  if n <= 0 [ stop ]
+  let para-embarcar n-of n candidatos
+  ask para-embarcar [ set dentro-de-trem myself  hide-turtle ]
+  set passageiros (sentence passageiros [self] of para-embarcar)
+  set direcao-passageiros direcao-emb
+end
+to desembarcar-passageiros
+  if empty? passageiros [ stop ]
+  let dir-pas direcao-passageiros
+  let tx xcor  let ty ycor
+  foreach passageiros [ p ->
+    ask p [
+      set dentro-de-trem nobody
+      show-turtle
+      ifelse dir-pas = "ida" [
+        let pos posicao-aleatoria-no-destino
+        setxy item 0 pos item 1 pos
+        set fase-movimento "no-destino"
+        set shape "person"  set color cor-original  set virou-veiculo? false
+        registrar-fim-de-viagem
+      ] [
+        setxy tx ty
+        set fase-movimento "saindo-estacao-trem"
+        set shape "person"  set color cor-original  set virou-veiculo? false
+      ]
+    ]
+  ]
+  set passageiros []
+  set direcao-passageiros ""
+end
+;; =====================================================================
+;; REGISTRO POR PERFIL
+;; Ao final de cada dia, conta quantos agentes de cada grupo usaram cada
+;; uma das oito cadeias na ida. Nenhum destes procedimentos usa números
+;; aleatórios, de modo que não alteram a trajetória da simulação.
+;; =====================================================================
+to-report nomes-cadeias
+  report (list "carro-direto" "carro-trem" "onibus-direto" "onibus-trem"
+               "moto-direto"  "moto-trem"  "bike-direto"   "bike-trem")
+end
+to-report pessoas-cativas
+  ;; pessoas que não possuem automóvel nem motocicleta
+  report (turtle-set trabalhadores estudantes outros) with [ not possui-carro? and not possui-moto? ]
+end
+to-report contagem-cadeias [ grupo ]
+  report map [ n -> count grupo with [ cadeia-ida = n ] ] nomes-cadeias
+end
+to registrar-perfis
+  set hist-perfil-trab  lput (contagem-cadeias trabalhadores)   hist-perfil-trab
+  set hist-perfil-estu  lput (contagem-cadeias estudantes)      hist-perfil-estu
+  set hist-perfil-outr  lput (contagem-cadeias outros)          hist-perfil-outr
+  set hist-perfil-cativ lput (contagem-cadeias pessoas-cativas) hist-perfil-cativ
+end
+;; Participação média (%) de cada uma das oito cadeias dentro do grupo,
+;; nos n últimos dias. Ordem: carro-direto, carro-trem, onibus-direto,
+;; onibus-trem, moto-direto, moto-trem, bike-direto, bike-trem.
+to-report perfil-pct-ultimos-dias [ hist n ]
+  if empty? hist [ report [] ]
+  let janela sublist hist (max (list 0 (length hist - n))) (length hist)
+  let pcts map [ dia -> ifelse-value (sum dia = 0)
+                          [ map [ x -> 0 ] dia ]
+                          [ map [ x -> 100 * x / sum dia ] dia ] ] janela
+  report map [ i -> precision (mean map [ d -> item i d ] pcts) 3 ] (range 8)
+end
+;; =====================================================================
+;; VISUALIZAÇÃO
+;; =====================================================================
+to atualizar-grafico
+  set-current-plot "Divisão Modal (%)"
+  set-current-plot-pen "Trem%"   plot pct-trem-metro
+  set-current-plot-pen "Onibus%" plot pct-onibus-puro
+  set-current-plot-pen "Auto%"   plot pct-auto
+  set-current-plot-pen "Moto%"   plot pct-moto
+  set-current-plot-pen "Bike%"   plot pct-bike
+  set-current-plot "Densidade da Ciclovia"
+  set-current-plot-pen "Densidade" plot densidade-ciclovia-hoje
+  set-current-plot-pen "Limite"    plot limite-saturacao-ciclovia
+end
+]]></code>
+  <widgets>
+    <view x="368" wrappingAllowedX="false" y="10" frameRate="30.0" minPycor="-30" height="798" showTickCounter="true" patchSize="13.0" fontSize="10" wrappingAllowedY="false" width="590" tickCounterLabel="ticks" maxPycor="30" updateMode="0" maxPxcor="22" minPxcor="-22"></view>
+    <button x="10" y="5" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="55">setup</button>
+    <switch x="10" y="50" height="40" on="true" variable="ciclovia" width="85" display="ciclovia"></switch>
+    <switch x="100" y="50" height="40" on="true" variable="bike-sharing" width="100" display="bike-sharing"></switch>
+    <button x="70" y="5" height="40" disableUntilTicks="false" forever="true" kind="Observer" width="55">go</button>
+    <monitor x="265" precision="17" y="10" height="60" fontSize="11" width="100" display="dia-atual">dia-atual</monitor>
+    <monitor x="265" precision="17" y="75" height="60" fontSize="11" width="100" display="Hora">hora-formatada</monitor>
+    <slider x="10" step="1" y="95" max="100" width="250" display="prob-chuva" height="50" min="0" direction="Horizontal" default="30.0" variable="prob-chuva"></slider>
+    <slider x="10" step="1" y="150" max="365" width="250" display="dias-simulacao" height="50" min="1" direction="Horizontal" default="15.0" variable="dias-simulacao"></slider>
+    <slider x="10" step="1" y="205" max="99999" width="250" display="semente" height="50" min="0" direction="Horizontal" default="0.0" variable="semente"></slider>
+    <switch x="10" y="260" height="40" on="true" variable="usar-semente?" width="110" display="usar-semente?"></switch>
+    <monitor x="265" precision="17" y="140" height="60" fontSize="11" width="100" display="Período">periodo-do-dia</monitor>
+    <monitor x="265" precision="17" y="205" height="60" fontSize="11" width="100" display="Clima">clima-hoje</monitor>
+    <monitor x="265" precision="17" y="270" height="60" fontSize="11" width="100" display="Em trânsito">n-fora-de-casa</monitor>
+    <monitor x="265" precision="17" y="335" height="60" fontSize="11" width="100" display="estado-semaforo">estado-semaforo</monitor>
+    <slider x="965" step="1" y="10" max="100" width="250" display="nivel-violencia-base" height="50" min="0" direction="Horizontal" default="40.0" variable="nivel-violencia-base"></slider>
+    <plot x="1220" autoPlotX="true" yMax="100.0" autoPlotY="false" y="10" xMin="0.0" height="355" legend="false" xMax="30.0" yMin="0.0" width="675" xAxis="Dias" display="Divisão Modal (%)">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="Trem%" color="-7500403" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="Onibus%" color="-13345367" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="Auto%" color="-5825686" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="Moto%" color="-955883" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="Bike%" color="-10899396" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+    </plot>
+    <plot x="1220" autoPlotX="true" yMax="1.0" autoPlotY="false" y="375" xMin="0.0" height="345" legend="false" xMax="30.0" yMin="0.0" width="675" xAxis="Dias" display="Densidade da Ciclovia">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="Densidade" color="-2674135" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="Limite" color="-16777216" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+    </plot>
+    <slider x="965" step="0.01" y="65" max="0.5" width="250" display="limite-saturacao-ciclovia" height="50" min="0" direction="Horizontal" default="0.15" variable="limite-saturacao-ciclovia"></slider>
+    <slider x="965" step="1" y="120" max="100" width="250" display="bikes-disponiveis-sharing" height="50" min="0" direction="Horizontal" default="80.0" variable="bikes-disponiveis-sharing"></slider>
+    <slider x="965" step="1" y="175" max="100" width="250" display="vagas-bicicletario" height="50" min="0" direction="Horizontal" default="30.0" variable="vagas-bicicletario"></slider>
+    <slider x="965" step="1" y="230" max="50" width="250" display="vagas-carro-estacao" height="50" min="0" direction="Horizontal" default="10.0" variable="vagas-carro-estacao"></slider>
+    <slider x="965" step="1" y="285" max="50" width="250" display="vagas-moto-estacao" height="50" min="0" direction="Horizontal" default="10.0" variable="vagas-moto-estacao"></slider>
+    <switch x="10" y="305" height="40" on="false" variable="sortear-parametros?" width="140" display="sortear-parametros?"></switch>
+    <switch x="10" y="350" height="40" on="true" variable="moto-recebe-sin?" width="125" display="moto-recebe-sin?"></switch>
+    <slider x="965" step="0.01" y="340" max="1" width="250" display="ciclovia-fator-inseguranca" height="50" min="0" direction="Horizontal" default="0.6" variable="ciclovia-fator-inseguranca"></slider>
+    <slider x="965" step="0.01" y="395" max="1" width="250" display="ciclovia-fator-esforco" height="50" min="0" direction="Horizontal" default="0.75" variable="ciclovia-fator-esforco"></slider>
+    <slider x="965" step="0.01" y="450" max="1" width="250" display="ciclovia-fator-tempo" height="50" min="0" direction="Horizontal" default="0.7" variable="ciclovia-fator-tempo"></slider>
+    <switch x="965" y="505" height="40" on="false" variable="sin-congelado?" width="125" display="sin-congelado?"></switch>
+  </widgets>
+  <info>## O QUE É
+
+Modelo baseado em agentes de escolha de cadeia modal em um corredor urbano estilizado, inspirado nos municípios não-capital da Região Metropolitana de São Paulo. O cenário sem intervenção é calibrado contra a Pesquisa Origem-Destino 2023 do Metrô de São Paulo.
+
+São 260 pessoas, em três perfis: trabalhadores, estudantes e deslocamentos não obrigatórios. Cada uma faz uma viagem diária de ida e volta e escolhe, por logit multinomial, entre oito cadeias modais: automóvel, ônibus, motocicleta ou bicicleta, em viagem completa ou até o trem. O modelo examina duas intervenções, a ciclovia segregada e o sistema de bicicletas compartilhadas, isoladas e em conjunto.
+
+## COMO USAR
+
+- **ciclovia** e **bike-sharing** definem o cenário.
+- **semente** e **usar-semente?** tornam a execução reproduzível.
+- Os sliders da coluna da direita são os parâmetros de cenário. Os padrões correspondem à parametrização de referência.
+- **sortear-parametros?** sorteia esses parâmetros a cada setup (usado no experimento E5).
+
+## CORES NA VISTA
+
+Iguais às do gráfico de divisão modal:
+
+- automóvel: magenta
+- ônibus: azul
+- motocicleta: laranja
+- bicicleta: verde
+- trem: cinza
+
+## EXPERIMENTOS (BehaviorSpace)
+
+Todos usam 60 dias, com medição nos dez últimos, exceto o E2, que usa 120 dias.
+
+- **E0_teste_rapido**: 4 execuções de 2 dias; confere se tudo roda.
+- **E1_cenarios** (40): os quatro cenários com dez sementes.
+- **E2_convergencia_120d** (40): horizonte estendido, com as séries diárias.
+- **E3_sin_congelado** (40): os quatro cenários sem a retroalimentação do safety-in-numbers.
+- **E4a_ciclovia_fraca** e **E4b_ciclovia_forte** (20 cada): cenários com ciclovia sob fatores de 0,80/0,90/0,85 e de 0,40/0,60/0,55. A linha de base e o bike-sharing isolado vêm do E1.
+- **E5_espaco_parametros** (200): cinquenta contextos sorteados, nos quatro cenários.
+- **E6_moto_sem_sin** (40): os quatro cenários sem a transferência do safety-in-numbers para a motocicleta.
+
+</info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="bike" rotatable="false" editableColorIndex="1">
+      <line endX="72" startY="183" marked="false" color="-1920102913" endY="184" startX="137"></line>
+      <circle x="65" y="184" marked="false" color="-1920102913" diameter="22" filled="false"></circle>
+      <circle x="128" y="187" marked="false" color="-1920102913" diameter="16" filled="false"></circle>
+      <circle x="177" y="148" marked="false" color="255" diameter="95" filled="false"></circle>
+      <circle x="174" y="144" marked="false" color="255" diameter="102" filled="false"></circle>
+      <circle x="24" y="144" marked="false" color="255" diameter="102" filled="false"></circle>
+      <circle x="28" y="148" marked="false" color="255" diameter="95" filled="false"></circle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="225" y="195"></point>
+        <point x="210" y="90"></point>
+        <point x="202" y="92"></point>
+        <point x="203" y="107"></point>
+        <point x="108" y="122"></point>
+        <point x="93" y="83"></point>
+        <point x="85" y="85"></point>
+        <point x="98" y="123"></point>
+        <point x="89" y="133"></point>
+        <point x="75" y="195"></point>
+        <point x="135" y="195"></point>
+        <point x="136" y="188"></point>
+        <point x="86" y="188"></point>
+        <point x="98" y="133"></point>
+        <point x="206" y="116"></point>
+        <point x="218" y="195"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="92" y="83"></point>
+        <point x="136" y="193"></point>
+        <point x="129" y="196"></point>
+        <point x="83" y="85"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="135" y="188"></point>
+        <point x="209" y="120"></point>
+        <point x="210" y="131"></point>
+        <point x="136" y="196"></point>
+      </polygon>
+      <line endX="130" startY="173" marked="false" color="-1920102913" endY="219" startX="141"></line>
+      <line endX="134" startY="172" marked="false" color="-1920102913" endY="172" startX="145"></line>
+      <line endX="123" startY="219" marked="false" color="-1920102913" endY="219" startX="134"></line>
+      <polygon color="255" filled="true" marked="false">
+        <point x="113" y="92"></point>
+        <point x="102" y="92"></point>
+        <point x="92" y="97"></point>
+        <point x="83" y="100"></point>
+        <point x="69" y="93"></point>
+        <point x="69" y="84"></point>
+        <point x="84" y="82"></point>
+        <point x="99" y="83"></point>
+        <point x="116" y="85"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="229" y="86"></point>
+        <point x="202" y="93"></point>
+        <point x="199" y="85"></point>
+        <point x="226" y="81"></point>
+      </polygon>
+      <rectangle endX="225" startY="75" marked="false" color="255" endY="90" startX="225" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="230" y="87"></point>
+        <point x="230" y="72"></point>
+        <point x="222" y="71"></point>
+        <point x="222" y="89"></point>
+      </polygon>
+      <circle x="125" y="184" marked="false" color="-1920102913" diameter="22" filled="false"></circle>
+      <line endX="72" startY="206" marked="false" color="-1920102913" endY="205" startX="141"></line>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="bus" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="206"></point>
+        <point x="15" y="150"></point>
+        <point x="15" y="120"></point>
+        <point x="30" y="105"></point>
+        <point x="270" y="105"></point>
+        <point x="285" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="285" y="206"></point>
+        <point x="270" y="210"></point>
+        <point x="30" y="210"></point>
+      </polygon>
+      <rectangle endX="231" startY="126" marked="false" color="255" endY="159" startX="36" filled="true"></rectangle>
+      <line endX="60" startY="135" marked="false" color="-1920102913" endY="165" startX="60"></line>
+      <line endX="60" startY="120" marked="false" color="-1920102913" endY="165" startX="60"></line>
+      <line endX="90" startY="120" marked="false" color="-1920102913" endY="165" startX="90"></line>
+      <line endX="120" startY="120" marked="false" color="-1920102913" endY="165" startX="120"></line>
+      <line endX="150" startY="120" marked="false" color="-1920102913" endY="165" startX="150"></line>
+      <line endX="180" startY="120" marked="false" color="-1920102913" endY="165" startX="180"></line>
+      <line endX="210" startY="120" marked="false" color="-1920102913" endY="165" startX="210"></line>
+      <line endX="240" startY="135" marked="false" color="-1920102913" endY="165" startX="240"></line>
+      <rectangle endX="285" startY="174" marked="false" color="255" endY="182" startX="15" filled="true"></rectangle>
+      <circle x="48" y="187" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="276" startY="127" marked="false" color="255" endY="205" startX="240" filled="true"></rectangle>
+      <circle x="195" y="187" marked="false" color="255" diameter="42" filled="true"></circle>
+      <line endX="257" startY="120" marked="false" color="-1920102913" endY="207" startX="257"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="car top" rotatable="true" editableColorIndex="0">
+      <polygon color="-303222273" filled="true" marked="true">
+        <point x="151" y="8"></point>
+        <point x="119" y="10"></point>
+        <point x="98" y="25"></point>
+        <point x="86" y="48"></point>
+        <point x="82" y="225"></point>
+        <point x="90" y="270"></point>
+        <point x="105" y="289"></point>
+        <point x="150" y="294"></point>
+        <point x="195" y="291"></point>
+        <point x="210" y="270"></point>
+        <point x="219" y="225"></point>
+        <point x="214" y="47"></point>
+        <point x="201" y="24"></point>
+        <point x="181" y="11"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="210" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="195" y="135"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="105" y="255"></point>
+        <point x="120" y="270"></point>
+        <point x="180" y="270"></point>
+        <point x="195" y="255"></point>
+        <point x="195" y="225"></point>
+        <point x="105" y="225"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="90" y="195"></point>
+        <point x="105" y="210"></point>
+        <point x="105" y="135"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="205" y="29"></point>
+        <point x="180" y="30"></point>
+        <point x="181" y="11"></point>
+      </polygon>
+      <line endX="195" startY="165" marked="true" color="-1920102913" endY="165" startX="210"></line>
+      <line endX="105" startY="165" marked="true" color="-1920102913" endY="165" startX="90"></line>
+      <polygon color="255" filled="true" marked="false">
+        <point x="121" y="135"></point>
+        <point x="180" y="134"></point>
+        <point x="204" y="97"></point>
+        <point x="182" y="89"></point>
+        <point x="153" y="85"></point>
+        <point x="120" y="89"></point>
+        <point x="98" y="97"></point>
+      </polygon>
+      <line endX="195" startY="90" marked="false" color="255" endY="30" startX="210"></line>
+      <line endX="105" startY="90" marked="false" color="255" endY="30" startX="90"></line>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="95" y="29"></point>
+        <point x="120" y="30"></point>
+        <point x="119" y="11"></point>
+      </polygon>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="motorcycle" rotatable="false" editableColorIndex="0">
+      <circle x="15" y="170" marked="false" color="255" diameter="100" filled="true"></circle>
+      <circle x="45" y="200" marked="false" color="-1920102913" diameter="40" filled="true"></circle>
+      <circle x="185" y="170" marked="false" color="255" diameter="100" filled="true"></circle>
+      <circle x="215" y="200" marked="false" color="-1920102913" diameter="40" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="45" y="205"></point>
+        <point x="150" y="195"></point>
+        <point x="152" y="210"></point>
+        <point x="48" y="222"></point>
+      </polygon>
+      <rectangle endX="175" startY="160" marked="false" color="1044266751" endY="215" startX="110" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="196" y="95"></point>
+        <point x="212" y="92"></point>
+        <point x="243" y="218"></point>
+        <point x="228" y="222"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="178" y="82"></point>
+        <point x="214" y="70"></point>
+        <point x="219" y="84"></point>
+        <point x="184" y="96"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="150"></point>
+        <point x="60" y="125"></point>
+        <point x="110" y="132"></point>
+        <point x="140" y="105"></point>
+        <point x="195" y="100"></point>
+        <point x="218" y="120"></point>
+        <point x="212" y="165"></point>
+        <point x="178" y="170"></point>
+        <point x="110" y="168"></point>
+        <point x="70" y="172"></point>
+        <point x="35" y="175"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="20" y="175"></point>
+        <point x="40" y="150"></point>
+        <point x="75" y="150"></point>
+        <point x="60" y="168"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="55" y="128"></point>
+        <point x="118" y="120"></point>
+        <point x="132" y="108"></point>
+        <point x="136" y="118"></point>
+        <point x="120" y="135"></point>
+        <point x="60" y="138"></point>
+      </polygon>
+      <circle x="208" y="108" marked="false" color="-1" diameter="26" filled="true"></circle>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="train" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="206"></point>
+        <point x="15" y="150"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="285" y="150"></point>
+        <point x="285" y="206"></point>
+        <point x="270" y="210"></point>
+        <point x="30" y="210"></point>
+      </polygon>
+      <circle x="240" y="195" marked="false" color="255" diameter="30" filled="true"></circle>
+      <circle x="210" y="195" marked="false" color="255" diameter="30" filled="true"></circle>
+      <circle x="60" y="195" marked="false" color="255" diameter="30" filled="true"></circle>
+      <circle x="30" y="195" marked="false" color="255" diameter="30" filled="true"></circle>
+      <rectangle endX="268" startY="140" marked="false" color="255" endY="165" startX="30" filled="true"></rectangle>
+      <line endX="60" startY="135" marked="true" color="-1920102913" endY="165" startX="60"></line>
+      <line endX="60" startY="135" marked="true" color="-1920102913" endY="165" startX="60"></line>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="165" startX="90"></line>
+      <line endX="120" startY="135" marked="true" color="-1920102913" endY="165" startX="120"></line>
+      <line endX="150" startY="135" marked="true" color="-1920102913" endY="165" startX="150"></line>
+      <line endX="180" startY="135" marked="true" color="-1920102913" endY="165" startX="180"></line>
+      <line endX="210" startY="135" marked="true" color="-1920102913" endY="165" startX="210"></line>
+      <line endX="240" startY="135" marked="true" color="-1920102913" endY="165" startX="240"></line>
+      <rectangle endX="19" startY="195" marked="false" color="255" endY="207" startX="5" filled="true"></rectangle>
+      <rectangle endX="295" startY="195" marked="false" color="255" endY="207" startX="281" filled="true"></rectangle>
+      <rectangle endX="285" startY="165" marked="false" color="878553599" endY="173" startX="15" filled="true"></rectangle>
+      <rectangle endX="285" startY="180" marked="false" color="-684578305" endY="188" startX="15" filled="true"></rectangle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+  <experiments>
+    <experiment name="E0_teste_rapido" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="2"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.75"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.7"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E1_cenarios" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="60"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.75"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.7"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E2_convergencia_120d" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+        <metric>serie-diaria hist-pct-trem</metric>
+        <metric>serie-diaria hist-pct-onibus</metric>
+        <metric>serie-diaria hist-pct-auto</metric>
+        <metric>serie-diaria hist-pct-moto</metric>
+        <metric>serie-diaria hist-pct-bike</metric>
+        <metric>serie-diaria hist-bike-media</metric>
+        <metric>serie-diaria hist-transito</metric>
+        <metric>serie-diaria hist-dens-ciclovia</metric>
+        <metric>serie-diaria hist-pico-bicicletario</metric>
+        <metric>serie-diaria hist-carro-trem</metric>
+        <metric>serie-diaria hist-moto-trem</metric>
+        <metric>serie-diaria hist-pico-bikes-uso</metric>
+        <metric>serie-diaria hist-stockouts</metric>
+        <metric>serie-diaria hist-bloqueios</metric>
+        <metric>serie-diaria hist-cad-bike-d</metric>
+        <metric>serie-diaria hist-cad-bike-t</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="120"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.75"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.7"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E3_sin_congelado" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="60"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.75"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.7"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E4a_ciclovia_fraca" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="60"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.8"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.9"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.85"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E4b_ciclovia_forte" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="60"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.4"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.55"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E5_espaco_parametros" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="60"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.75"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.7"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+          <value value="11"></value>
+          <value value="12"></value>
+          <value value="13"></value>
+          <value value="14"></value>
+          <value value="15"></value>
+          <value value="16"></value>
+          <value value="17"></value>
+          <value value="18"></value>
+          <value value="19"></value>
+          <value value="20"></value>
+          <value value="21"></value>
+          <value value="22"></value>
+          <value value="23"></value>
+          <value value="24"></value>
+          <value value="25"></value>
+          <value value="26"></value>
+          <value value="27"></value>
+          <value value="28"></value>
+          <value value="29"></value>
+          <value value="30"></value>
+          <value value="31"></value>
+          <value value="32"></value>
+          <value value="33"></value>
+          <value value="34"></value>
+          <value value="35"></value>
+          <value value="36"></value>
+          <value value="37"></value>
+          <value value="38"></value>
+          <value value="39"></value>
+          <value value="40"></value>
+          <value value="41"></value>
+          <value value="42"></value>
+          <value value="43"></value>
+          <value value="44"></value>
+          <value value="45"></value>
+          <value value="46"></value>
+          <value value="47"></value>
+          <value value="48"></value>
+          <value value="49"></value>
+          <value value="50"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="E6_moto_sem_sin" repetitions="1" sequentialRunOrder="false" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>dia-atual</metric>
+        <metric>media-ultimos-dias hist-pct-trem 10</metric>
+        <metric>media-ultimos-dias hist-pct-onibus 10</metric>
+        <metric>media-ultimos-dias hist-pct-auto 10</metric>
+        <metric>media-ultimos-dias hist-pct-moto 10</metric>
+        <metric>media-ultimos-dias hist-pct-bike 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-carro-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-onibus-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-moto-t 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-d 10</metric>
+        <metric>media-ultimos-dias hist-cad-bike-t 10</metric>
+        <metric>media-ultimos-dias hist-bike-media 10</metric>
+        <metric>last hist-bike-media</metric>
+        <metric>media-ultimos-dias hist-transito 10</metric>
+        <metric>media-ultimos-dias hist-vel-carro 10</metric>
+        <metric>media-ultimos-dias hist-vel-moto 10</metric>
+        <metric>media-ultimos-dias hist-vel-onibus 10</metric>
+        <metric>media-ultimos-dias hist-dens-ciclovia 10</metric>
+        <metric>media-ultimos-dias hist-bike-compartilhada 10</metric>
+        <metric>media-ultimos-dias hist-stockouts 10</metric>
+        <metric>sum hist-stockouts</metric>
+        <metric><![CDATA[length filter [ s -> s > 0 ] hist-stockouts]]></metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-trab 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-estu 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-outr 10</metric>
+        <metric>perfil-pct-ultimos-dias hist-perfil-cativ 10</metric>
+        <metric>count pessoas-cativas</metric>
+        <metric>prob-chuva</metric>
+        <metric>nivel-violencia-base</metric>
+        <metric>limite-saturacao-ciclovia</metric>
+        <metric>bikes-disponiveis-sharing</metric>
+        <metric>vagas-bicicletario</metric>
+        <metric>vagas-carro-estacao</metric>
+        <metric>vagas-moto-estacao</metric>
+        <metric>fator-cic-inseguranca</metric>
+        <metric>fator-cic-esforco</metric>
+        <metric>fator-cic-tempo</metric>
+        <metric>decaimento-safety-val</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="ciclovia">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bike-sharing">
+          <value value="false"></value>
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="usar-semente?">
+          <value value="true"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sortear-parametros?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="dias-simulacao">
+          <value value="60"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="prob-chuva">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="nivel-violencia-base">
+          <value value="40"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="limite-saturacao-ciclovia">
+          <value value="0.15"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="bikes-disponiveis-sharing">
+          <value value="80"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-bicicletario">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-carro-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="vagas-moto-estacao">
+          <value value="10"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="moto-recebe-sin?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="sin-congelado?">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-inseguranca">
+          <value value="0.6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-esforco">
+          <value value="0.75"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="ciclovia-fator-tempo">
+          <value value="0.7"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="semente">
+          <value value="1"></value>
+          <value value="2"></value>
+          <value value="3"></value>
+          <value value="4"></value>
+          <value value="5"></value>
+          <value value="6"></value>
+          <value value="7"></value>
+          <value value="8"></value>
+          <value value="9"></value>
+          <value value="10"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+  </experiments>
+</model>
